@@ -1,19 +1,16 @@
+import AVKit
+import Combine
+
 // ===================================
 //  PlayerManager.swift
 // ===================================
-// 安定したビデオ再生を実現するための、新しいプレイヤー管理クラスです。
-
-import AVKit
-import Combine
+// 安定したビデオ再生を実現するための、プレイヤー管理クラスです。
 
 @MainActor
 final class PlayerManager: ObservableObject {
     @Published var player = AVPlayer()
     @Published var isPlaying = false
-    @Published var currentTime: Double = 0
-    @Published var duration: Double = 0
     @Published var isReadyToPlay = false
-
     private var cancellables = Set<AnyCancellable>()
 
     init(videoURL: URL) {
@@ -24,11 +21,10 @@ final class PlayerManager: ObservableObject {
         Task {
             do {
                 let asset = AVURLAsset(url: url)
-                let (isPlayable, loadedDuration) = try await asset.load(.isPlayable, .duration)
+                let isPlayable = try await asset.load(.isPlayable)
 
                 if isPlayable {
                     let playerItem = AVPlayerItem(asset: asset)
-                    self.duration = loadedDuration.seconds
                     self.player.replaceCurrentItem(with: playerItem)
 
                     player.publisher(for: \.rate)

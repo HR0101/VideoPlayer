@@ -1,24 +1,22 @@
+import Foundation
+import SwiftUI
+
 // ===================================
 //  VideoManager.swift
 // ===================================
 // アルバム、ごみ箱の管理を担当します。
-
-import SwiftUI
-import AVFoundation
-
 @MainActor
 class VideoManager: ObservableObject {
     @Published var albums: [String] = []
     
     private let rootDirectory: URL
     private let trashDirectory: URL
-    // favoritesFileURLを削除
+    private let originalAlbumAttributeKey = "jp.co.yourapp.originalAlbum"
 
     init() {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         rootDirectory = documentsPath.appendingPathComponent("VideoAlbums")
         trashDirectory = rootDirectory.appendingPathComponent("ごみ箱")
-        // favoritesFileURLの初期化を削除
         
         try? FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true, attributes: nil)
         try? FileManager.default.createDirectory(at: trashDirectory, withIntermediateDirectories: true, attributes: nil)
@@ -48,11 +46,9 @@ class VideoManager: ObservableObject {
             }
         }
     }
-    
+
     func deleteAlbum(name: String) {
         let albumURL = rootDirectory.appendingPathComponent(name)
-        // お気に入り情報の削除処理を削除
-        
         do {
             try FileManager.default.removeItem(at: albumURL)
             loadAlbums()
@@ -60,7 +56,7 @@ class VideoManager: ObservableObject {
             print("Error deleting album: \(error)")
         }
     }
-
+    
     // MARK: - Video Fetching
     func fetchVideos(for albumType: AlbumType) -> [URL] {
         var videoURLs: [URL] = []
@@ -71,14 +67,16 @@ class VideoManager: ObservableObject {
                     let albumURL = rootDirectory.appendingPathComponent(albumName)
                     videoURLs.append(contentsOf: try FileManager.default.contentsOfDirectory(at: albumURL, includingPropertiesForKeys: nil))
                 }
-            // .favorites ケースを削除
             case .trash:
                 videoURLs = try FileManager.default.contentsOfDirectory(at: trashDirectory, includingPropertiesForKeys: nil)
             case .user(let albumName):
                 let albumURL = rootDirectory.appendingPathComponent(albumName)
                 videoURLs = try FileManager.default.contentsOfDirectory(at: albumURL, includingPropertiesForKeys: nil)
             }
-            return videoURLs.filter { $0.pathExtension.lowercased() == "mov" || $0.pathExtension.lowercased() == "mp4" }
+            return videoURLs.filter { url in
+                let pathExtension = url.pathExtension.lowercased()
+                return (pathExtension == "mov" || pathExtension == "mp4") && !url.lastPathComponent.hasPrefix(".")
+            }
         } catch {
             print("Error fetching videos for \(albumType): \(error)")
             return []
@@ -88,36 +86,55 @@ class VideoManager: ObservableObject {
     // MARK: - Video Operations
     func importVideos(from urls: [URL], to albumName: String) async {
         let albumURL = rootDirectory.appendingPathComponent(albumName)
-        createAlbum(name: albumName) // アルバムがなければ作成
+        createAlbum(name: albumName)
         
         for url in urls {
             let shouldStopAccessing = url.startAccessingSecurityScopedResource()
             defer { if shouldStopAccessing { url.stopAccessingSecurityScopedResource() } }
+            
             do {
-                let uniqueFileName = UUID().uuidString + "." + url.pathExtension
-                let destinationURL = albumURL.appendingPathComponent(uniqueFileName)
+                let originalFileName = url.lastPathComponent
+                var destinationURL = albumURL.appendingPathComponent(originalFileName)
+                var counter = 2
+                
+                while FileManager.default.fileExists(atPath: destinationURL.path) {
+                    let fileNameWithoutExtension = url.deletingPathExtension().lastPathComponent
+                    let fileExtension = url.pathExtension
+                    let newFileName = "\(fileNameWithoutExtension) (\(counter)).\(fileExtension)"
+                    destinationURL = albumURL.appendingPathComponent(newFileName)
+                    counter += 1
+                }
+                
                 try FileManager.default.copyItem(at: url, to: destinationURL)
+                
             } catch {
                 print("Error importing video: \(error.localizedDescription)")
             }
         }
     }
-    
+
     func moveVideoToTrash(url: URL) {
         do {
+            let originalAlbum = url.deletingLastPathComponent().lastPathComponent
+            if originalAlbum != "ごみ箱" {
+                try setExtendedAttribute(at: url, name: originalAlbumAttributeKey, value: originalAlbum)
+            }
+            
             let destinationURL = trashDirectory.appendingPathComponent(url.lastPathComponent)
             try FileManager.default.moveItem(at: url, to: destinationURL)
-            // お気に入りからの削除処理を削除
         } catch {
             print("Error moving video to trash: \(error)")
         }
     }
 
     func restoreVideoFromTrash(url: URL) {
-        let defaultAlbum = "マイアルバム"
-        createAlbum(name: defaultAlbum)
-        let destinationURL = rootDirectory.appendingPathComponent(defaultAlbum).appendingPathComponent(url.lastPathComponent)
         do {
+            let originalAlbum = try getExtendedAttribute(at: url, name: originalAlbumAttributeKey)
+            let destinationAlbumName = originalAlbum ?? "マイアルバム"
+            createAlbum(name: destinationAlbumName)
+            
+            let destinationURL = rootDirectory.appendingPathComponent(destinationAlbumName).appendingPathComponent(url.lastPathComponent)
+            
             try FileManager.default.moveItem(at: url, to: destinationURL)
         } catch {
             print("Error restoring video: \(error)")
@@ -137,6 +154,34 @@ class VideoManager: ObservableObject {
         for item in trashItems { deletePermanently(url: item) }
     }
 
-    // MARK: - Favorites Management
-    // このセクション全体を削除
+    // MARK: - Extended Attribute Helpers
+    private func setExtendedAttribute(at url: URL, name: String, value: String) throws {
+        guard let valueData = value.data(using: .utf8) else { return }
+        let result = valueData.withUnsafeBytes {
+            setxattr(url.path, name, $0.baseAddress, valueData.count, 0, 0)
+        }
+        if result == -1 {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Failed to set extended attribute."])
+        }
+    }
+
+    private func getExtendedAttribute(at url: URL, name: String) throws -> String? {
+        let bufferSize = 256
+        var buffer = [CChar](repeating: 0, count: bufferSize)
+        let readBytes = getxattr(url.path, name, &buffer, bufferSize, 0, 0)
+
+        if readBytes > 0 {
+            return String(cString: buffer)
+        }
+        
+        if readBytes == -1 && errno == ENOATTR {
+            return nil
+        }
+        
+        if readBytes == -1 {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Failed to get extended attribute."])
+        }
+        
+        return nil
+    }
 }

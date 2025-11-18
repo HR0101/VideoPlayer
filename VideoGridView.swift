@@ -5,34 +5,89 @@ import AVFoundation
 //  VideoGridView.swift
 // ===================================
 // アルバム内のビデオをグリッド表示します。
-// ツールバーの定義を単一のモディファイアに統合し、安定性を向上させました。
+// 修正：「長い順」と「短い順」の並び替えロジックを実装しました。private struct VideoThumbnailPreferenceKey: PreferenceKey {
+static var defaultValue: [URL: CGRect] = [:]
+static func reduce(value: inout [URL: CGRect], nextValue: () -> [URL: CGRect]) {
+value.merge(nextValue(), uniquingKeysWith: { $1 })
+}
+}struct VideoGridView: View {
+private enum DragSelectionState {
+case inactive, selecting, deselecting, scrolling
+}let albumType: AlbumType
+let albumName: String
+@ObservedObject var videoManager: VideoManager
+@EnvironmentObject var appSettings: AppSettings
 
-struct VideoGridView: View {
-    let albumType: AlbumType
-    let albumName: String
-    @ObservedObject var videoManager: VideoManager
-    @EnvironmentObject var appSettings: AppSettings
-    
-    @State private var videoMetadatas: [VideoMetadata] = []
-    @State private var videoToPlay: IdentifiableURL?
-    @State private var showDocumentPicker = false
-    @State private var showEmptyTrashAlert = false
-    
-    @State private var isSelectionMode = false
-    @State private var selectedVideos = Set<URL>()
-    
-    @State private var sortOrder: SortOrder = .byDateAdded
+@State private var videoMetadatas: [VideoMetadata] = []
+@State private var videoToPlay: IdentifiableURL?
+@State private var showDocumentPicker = false
+@State private var showEmptyTrashAlert = false
 
-    private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+@State private var isSelectionMode = false
+@State private var selectedVideos = Set<URL>()
+
+@State private var sortOrder: SortOrder = .byDateAdded
+
+@State private var searchText = ""
+
+@State private var thumbnailFrames: [URL: CGRect] = [:]
+@State private var dragSelectedURLs = Set<URL>()
+@State private var dragSelectionMode: DragSelectionState = .inactive
+@GestureState private var dragValue: DragGesture.Value? = nil
+
+private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+
+private var filteredAndSortedVideos: [VideoMetadata] {
+    let filtered: [VideoMetadata]
+    if searchText.isEmpty {
+        filtered = videoMetadatas
+    } else {
+        filtered = videoMetadatas.filter { $0.url.lastPathComponent.localizedCaseInsensitiveContains(searchText) }
+    }
     
-    private var sortedVideos: [VideoMetadata] {
-        switch sortOrder {
-        case .byDateAdded:
-            return videoMetadatas.sorted { $0.dateAdded > $1.dateAdded }
-        case .byCreationDate:
-            return videoMetadatas.sorted { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }
-        case .byName:
-            return videoMetadatas.sorted { $0.url.lastPathComponent < $1.url.lastPathComponent }
+    // MODIFIED: 長さ順（長い順・短い順）のソートロジックを実装
+    switch sortOrder {
+    case .byDateAdded:
+        return filtered.sorted { $0.dateAdded > $1.dateAdded }
+    case .byCreationDate:
+        return filtered.sorted { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }
+    case .byName:
+        return filtered.sorted { $0.url.lastPathComponent < $1.url.lastPathComponent }
+    case .byLengthDescending:
+        return filtered.sorted { $0.duration > $1.duration }
+    case .byLengthAscending:
+        return filtered.sorted { $0.duration < $1.duration }
+    }
+}
+
+private var allVideosSelected: Bool {
+    !filteredAndSortedVideos.isEmpty && selectedVideos.count == filteredAndSortedVideos.count
+}
+
+var body: some View {
+    ZStack {
+        ZStack(alignment: .bottom) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 2) {
+                        ForEach(filteredAndSortedVideos) { metadata in
+                            thumbnailView(for: metadata)
+                                .id(metadata.id)
+                        }
+                    }
+                }
+                .onPreferenceChange(VideoThumbnailPreferenceKey.self) { frames in
+                    self.thumbnailFrames = frames
+                }
+            }
+
+            if isSelectionMode {
+                if albumType == .trash {
+                    restoreButton
+                } else {
+                    deleteButton
+                }
+            }
         }
     }
 

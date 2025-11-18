@@ -2,7 +2,11 @@ import SwiftUI
 import AVFoundation
 
 // ===================================
+<<<<<<< HEAD
 //  VideoGridView.swift (デザイン修正版)
+=======
+//  VideoGridView.swift (全画面表示対応版)
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
 // ===================================
 // アルバム内のビデオをグリッド表示します。
 
@@ -85,8 +89,12 @@ private struct CustomTrashAlertView: View {
                     }
                     .foregroundColor(.red)
 
+<<<<<<< HEAD
                     // ★ 修正: DividerをHStack内で使用
                     Color.gray.opacity(0.5).frame(width: 1, height: 40)
+=======
+                    Divider()
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
 
                     Button {
                         isPresented = false
@@ -136,11 +144,14 @@ struct VideoGridView: View {
     @State private var dragSelectedURLs = Set<URL>()
     @State private var dragSelectionMode: DragSelectionState = .inactive
     @GestureState private var dragValue: DragGesture.Value? = nil
+<<<<<<< HEAD
     
     // ★ 追加: カスタムカラー定義
     private let primaryDarkColor = Color(red: 0.1, green: 0.1, blue: 0.1)
     private let accentGlowColor = Color.cyan
 
+=======
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
 
     private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
 
@@ -172,9 +183,12 @@ struct VideoGridView: View {
 
     var body: some View {
         ZStack {
+<<<<<<< HEAD
             // ★ 追加: 背景色をAlbumListViewと統一
             primaryDarkColor.ignoresSafeArea()
             
+=======
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
             ZStack(alignment: .bottom) {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -201,10 +215,13 @@ struct VideoGridView: View {
             .navigationTitle(isSelectionMode ? "\(selectedVideos.count)件を選択中" : albumName)
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchText, prompt: "ビデオを検索")
+<<<<<<< HEAD
             // ★ 修正: ナビゲーションバーのカスタムをAlbumListViewと統一
             .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbarBackground(primaryDarkColor, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
+=======
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
             .toolbar {
                 toolbarContent()
             }
@@ -256,20 +273,27 @@ struct VideoGridView: View {
             if isSelectionMode {
                 Button(allVideosSelected ? "選択を解除" : "すべて選択", action: toggleSelectAll)
                     .disabled(filteredAndSortedVideos.isEmpty)
+<<<<<<< HEAD
                     .foregroundColor(accentGlowColor)
+=======
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
             }
         }
         
         ToolbarItem(placement: .navigationBarTrailing) {
             if isSelectionMode {
                 Button("キャンセル", action: exitSelectionMode)
+<<<<<<< HEAD
                     .foregroundColor(accentGlowColor)
+=======
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
             } else {
                 HStack {
                     if albumType == .trash {
                         Button("ごみ箱を空にする") {
                             showEmptyTrashAlert = true
                         }.disabled(videoMetadatas.isEmpty)
+<<<<<<< HEAD
                          .foregroundColor(.red)
                     } else {
                         Button(action: { showImportOptions = true }) {
@@ -283,6 +307,12 @@ struct VideoGridView: View {
                         Button("選択") { isSelectionMode = true }
                             .disabled(videoMetadatas.isEmpty)
                             .foregroundColor(accentGlowColor)
+=======
+                    } else {
+                        Button(action: { showImportOptions = true }) { Image(systemName: "plus") }
+                        Menu { menuContent } label: { Image(systemName: "ellipsis.circle") }
+                        Button("選択") { isSelectionMode = true }.disabled(videoMetadatas.isEmpty)
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
                     }
                 }
             }
@@ -296,14 +326,22 @@ struct VideoGridView: View {
                 .fontWeight(.bold)
                 .padding()
                 .frame(maxWidth: .infinity)
+<<<<<<< HEAD
                 .background(selectedVideos.isEmpty ? Color.gray.opacity(0.5) : Color.red)
+=======
+                .background(selectedVideos.isEmpty ? Color.gray : Color.red)
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
                 .foregroundColor(.white)
                 .cornerRadius(10)
         }
         .disabled(selectedVideos.isEmpty)
         .padding()
+<<<<<<< HEAD
         // ★ 修正: よりモダンなぼかし効果
         .background(.ultraThinMaterial)
+=======
+        .background(.thinMaterial)
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
@@ -314,14 +352,22 @@ struct VideoGridView: View {
                 .fontWeight(.bold)
                 .padding()
                 .frame(maxWidth: .infinity)
+<<<<<<< HEAD
                 .background(selectedVideos.isEmpty ? Color.gray.opacity(0.5) : accentGlowColor)
+=======
+                .background(selectedVideos.isEmpty ? Color.gray : Color.blue)
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
                 .foregroundColor(.white)
                 .cornerRadius(10)
         }
         .disabled(selectedVideos.isEmpty)
         .padding()
+<<<<<<< HEAD
         // ★ 修正: よりモダンなぼかし効果
         .background(.ultraThinMaterial)
+=======
+        .background(.thinMaterial)
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
@@ -353,10 +399,13 @@ struct VideoGridView: View {
                         Button(role: .destructive) { deleteSingleVideo(at: metadata.url) } label: { Label("削除", systemImage: "trash") }
                     }
                 }
+<<<<<<< HEAD
             
             // ★ 追加: ネオ・モーフィズム風の影
             .shadow(color: Color.black.opacity(0.4), radius: 6, x: 3, y: 3)
             .shadow(color: Color.white.opacity(0.05), radius: 3, x: -1, y: -1)
+=======
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
 
             if isSelectionMode && selectedVideos.contains(metadata.url) {
                 Color.black.opacity(0.4)
@@ -365,6 +414,7 @@ struct VideoGridView: View {
             if isSelectionMode {
                 let isSelected = selectedVideos.contains(metadata.url)
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+<<<<<<< HEAD
                     // ★ 修正: 選択時を鮮やかな色に
                     .font(.title2.weight(.bold))
                     .foregroundColor(isSelected ? accentGlowColor : .white)
@@ -382,6 +432,19 @@ struct VideoGridView: View {
         }
         // ★ 修正: 角を大きく丸める
         .cornerRadius(12)
+=======
+                    .font(.title2)
+                    .foregroundColor(.white)
+                    .padding(5)
+                    .background(
+                        Group {
+                            if !isSelected { Color.black.opacity(0.3).clipShape(Circle()) }
+                        }
+                    )
+            }
+        }
+        .cornerRadius(8)
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
         .clipped()
         .contentShape(Rectangle())
         .onTapGesture {
@@ -539,3 +602,7 @@ struct VideoGridView: View {
         loadVideos()
     }
 }
+<<<<<<< HEAD
+=======
+
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165

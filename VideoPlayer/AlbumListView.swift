@@ -1,7 +1,11 @@
 import SwiftUI
 
 // ===================================
+<<<<<<< HEAD
 //  AlbumListView.swift (デザイン修正版)
+=======
+//  AlbumListView.swift (修正版)
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
 // ===================================
 
 struct AlbumListView: View {
@@ -33,9 +37,13 @@ struct AlbumListView: View {
                         NavigationLink(destination: VideoGridView(albumType: album.type, albumName: album.name, videoManager: videoManager)) {
                             HStack {
                                 Image(systemName: album.icon)
+<<<<<<< HEAD
                                     // ★ 修正: アイコンカラーを鮮やかに
                                     .foregroundColor(album.type == .trash ? .gray.opacity(0.7) : accentGlowColor)
                                     .font(.title3) // アイコンを少し大きく
+=======
+                                    .foregroundColor(album.type == .trash ? .gray : .accentColor)
+>>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
                                 Text(album.name)
                                     .fontWeight(.medium)
                             }
@@ -98,6 +106,31 @@ struct AlbumListView: View {
                         Text("Mac サーバー")
                             .font(.caption)
                             .fontWeight(.bold)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                if let server = serverManager.server, let address = server.address {
+                    Section(header: Text(server.name)) {
+                        if serverManager.isLoading {
+                            ProgressView()
+                        } else if let errorMessage = serverManager.errorMessage {
+                            Text(errorMessage).foregroundColor(.secondary)
+                        } else {
+                            ForEach(serverManager.albums) { album in
+                                NavigationLink(destination: RemoteVideoListView(serverName: album.name, serverAddress: address, albumID: album.id)) {
+                                    HStack {
+                                        Image(systemName: "folder.fill")
+                                            .foregroundColor(.yellow)
+                                        Text(album.name)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Section(header: Text("Mac サーバー")) {
+                        Text("同じWi-Fi内でサーバーが見つかりません")
                             .foregroundColor(.secondary)
                     }
                 }

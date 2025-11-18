@@ -1,11 +1,10 @@
-// ===================================
-//  CustomVideoPlayerContainer.swift
-// ===================================
-// 安定化されたPlayerManagerを使い、再生準備が整うまでインジケーターを表示します。
-
 import SwiftUI
 import AVKit
 
+// ===================================
+//  CustomVideoPlayerContainer.swift
+// ===================================
+// PlayerManagerを使い、再生準備が整うまでインジケーターを表示します。
 struct CustomVideoPlayerContainer: View {
     let videoURL: URL
     @StateObject private var playerManager: PlayerManager
@@ -14,7 +13,7 @@ struct CustomVideoPlayerContainer: View {
         self.videoURL = videoURL
         _playerManager = StateObject(wrappedValue: PlayerManager(videoURL: videoURL))
     }
-    
+
     var body: some View {
         ZStack {
             Color.black

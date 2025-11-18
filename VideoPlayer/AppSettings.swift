@@ -7,18 +7,29 @@ import SwiftUI
 
 class AppSettings: ObservableObject {
     private static let thumbnailOptionKey = "thumbnailOption"
+    // ★ 削除：スライドショー関連のキー
+    // private static let slideshowClipDurationKey = "slideshowClipDuration"
+    // private static let slideshowVideoCountKey = "slideshowVideoCount"
 
-    // @Publishedプロパティは変更ありません。
-    // AppSettingsは、Models.swiftで定義されたThumbnailOption型を使用します。
     @Published var thumbnailOption: ThumbnailOption {
         didSet {
             UserDefaults.standard.set(thumbnailOption.rawValue, forKey: Self.thumbnailOptionKey)
         }
     }
+    
+    // ★ 削除：スライドショー関連のプロパティ
+    // @Published var slideshowClipDuration: TimeInterval { ... }
+    // @Published var slideshowVideoCount: Int { ... }
 
     init() {
-        let savedValue = UserDefaults.standard.integer(forKey: Self.thumbnailOptionKey)
-        // ThumbnailOptionはModels.swiftで定義されたものを使用します。
-        self.thumbnailOption = ThumbnailOption(rawValue: savedValue) ?? .initial
+        let savedThumbnailValue = UserDefaults.standard.integer(forKey: Self.thumbnailOptionKey)
+        self.thumbnailOption = ThumbnailOption(rawValue: savedThumbnailValue) ?? .initial
+        
+        // ★ 削除：スライドショー関連設定の読み込み処理
+        // let savedDurationValue = UserDefaults.standard.double(forKey: Self.slideshowClipDurationKey)
+        // self.slideshowClipDuration = savedDurationValue > 0 ? savedDurationValue : 10.0
+        
+        // let savedCountValue = UserDefaults.standard.integer(forKey: Self.slideshowVideoCountKey)
+        // self.slideshowVideoCount = savedCountValue > 0 ? savedCountValue : 20
     }
 }

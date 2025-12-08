@@ -1,11 +1,7 @@
 import SwiftUI
 
 // ===================================
-<<<<<<< HEAD
-//  AlbumListView.swift (デザイン修正版)
-=======
-//  AlbumListView.swift (修正版)
->>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
+//  AlbumListView.swift (完全分割表示版)
 // ===================================
 
 struct AlbumListView: View {
@@ -24,126 +20,21 @@ struct AlbumListView: View {
         (.trash, "ごみ箱", "trash.fill")
     ]
     
-    // ★ 追加: カスタムカラー定義
-    private let primaryDarkColor = Color(red: 0.1, green: 0.1, blue: 0.1) // 濃いダーク背景
-    private let accentGlowColor = Color.cyan // 鮮やかなアクセント
+    private let primaryDarkColor = Color(red: 0.1, green: 0.1, blue: 0.1)
+    private let accentGlowColor = Color.cyan
 
     var body: some View {
-        // ★ 修正: NavigationViewをNavigationStackに変更し、カスタムカラーを適用
         NavigationStack {
             List {
-                Section {
-                    ForEach(specialAlbums, id: \.type) { album in
-                        NavigationLink(destination: VideoGridView(albumType: album.type, albumName: album.name, videoManager: videoManager)) {
-                            HStack {
-                                Image(systemName: album.icon)
-<<<<<<< HEAD
-                                    // ★ 修正: アイコンカラーを鮮やかに
-                                    .foregroundColor(album.type == .trash ? .gray.opacity(0.7) : accentGlowColor)
-                                    .font(.title3) // アイコンを少し大きく
-=======
-                                    .foregroundColor(album.type == .trash ? .gray : .accentColor)
->>>>>>> 490edcb2a745a7a5fc03575227a3f7ad14cf1165
-                                Text(album.name)
-                                    .fontWeight(.medium)
-                            }
-                        }
-                    }
-                } header: {
-                    Text("ライブラリ")
-                        .font(.caption) // ヘッダーを控えめに
-                        .fontWeight(.bold)
-                        .foregroundColor(.secondary)
-                }
-                
-                Section {
-                    ForEach(videoManager.albums, id: \.self) { album in
-                        NavigationLink(destination: VideoGridView(albumType: .user(album), albumName: album, videoManager: videoManager)) {
-                            HStack {
-                                Image(systemName: "folder.fill")
-                                    // ★ 修正: アイコンを鮮やかな色に
-                                    .foregroundColor(.orange)
-                                Text(album)
-                            }
-                        }
-                    }
-                    .onDelete(perform: prepareToDeleteAlbum)
-                } header: {
-                    Text("マイアルバム")
-                        .font(.caption)
-                        .fontWeight(.bold)
-                        .foregroundColor(.secondary)
-                }
-                
-                if let server = serverManager.server, let address = server.address {
-                    Section {
-                        if serverManager.isLoading {
-                            ProgressView()
-                        } else if let errorMessage = serverManager.errorMessage {
-                            Text(errorMessage).foregroundColor(.secondary)
-                        } else {
-                            ForEach(serverManager.albums) { album in
-                                NavigationLink(destination: RemoteVideoListView(serverName: album.name, serverAddress: address, albumID: album.id)) {
-                                    HStack {
-                                        Image(systemName: "folder.fill")
-                                            .foregroundColor(.yellow)
-                                        Text(album.name)
-                                    }
-                                }
-                            }
-                        }
-                    } header: {
-                        Text(server.name)
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .foregroundColor(accentGlowColor) // サーバー名をアクセントカラーに
-                    }
-                } else {
-                    Section {
-                        Text("同じWi-Fi内でサーバーが見つかりません")
-                            .foregroundColor(.secondary)
-                    } header: {
-                        Text("Mac サーバー")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                if let server = serverManager.server, let address = server.address {
-                    Section(header: Text(server.name)) {
-                        if serverManager.isLoading {
-                            ProgressView()
-                        } else if let errorMessage = serverManager.errorMessage {
-                            Text(errorMessage).foregroundColor(.secondary)
-                        } else {
-                            ForEach(serverManager.albums) { album in
-                                NavigationLink(destination: RemoteVideoListView(serverName: album.name, serverAddress: address, albumID: album.id)) {
-                                    HStack {
-                                        Image(systemName: "folder.fill")
-                                            .foregroundColor(.yellow)
-                                        Text(album.name)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    Section(header: Text("Mac サーバー")) {
-                        Text("同じWi-Fi内でサーバーが見つかりません")
-                            .foregroundColor(.secondary)
-                    }
-                }
+                localSections
+                serverSections
             }
-            // ★ 修正: リストのスタイルと背景色を設定
             .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden) // 背景色をカスタムするために隠す
-            .background(primaryDarkColor.ignoresSafeArea()) // 濃いダーク背景色
-
+            .scrollContentBackground(.hidden)
+            .background(primaryDarkColor.ignoresSafeArea())
             .navigationTitle("アルバム")
-            // ★ 修正: ナビゲーションバーのカスタム
-            .toolbarColorScheme(.dark, for: .navigationBar) // ツールバーをダークに
-            .toolbarBackground(primaryDarkColor, for: .navigationBar) // ツールバーの背景色
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbarBackground(primaryDarkColor, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -179,6 +70,177 @@ struct AlbumListView: View {
             }
             .onChange(of: serverBrowser.discoveredServers) { servers in
                 serverManager.updateServer(servers.first)
+            }
+        }
+    }
+    
+    // MARK: - View Builders
+    
+    @ViewBuilder
+    private var localSections: some View {
+        Section {
+            ForEach(specialAlbums, id: \.type) { album in
+                NavigationLink(destination: VideoGridView(albumType: album.type, albumName: album.name, videoManager: videoManager)) {
+                    HStack {
+                        Image(systemName: album.icon)
+                            .foregroundColor(album.type == .trash ? .gray.opacity(0.7) : accentGlowColor)
+                            .font(.title3)
+                        Text(album.name)
+                            .fontWeight(.medium)
+                    }
+                }
+            }
+        } header: {
+            Text("ローカルライブラリ")
+                .font(.caption)
+                .fontWeight(.bold)
+                .foregroundColor(.secondary)
+        }
+        
+        Section {
+            ForEach(videoManager.albums, id: \.self) { album in
+                NavigationLink(destination: VideoGridView(albumType: .user(album), albumName: album, videoManager: videoManager)) {
+                    HStack {
+                        Image(systemName: "folder.fill")
+                            .foregroundColor(.orange)
+                        Text(album)
+                    }
+                }
+            }
+            .onDelete(perform: prepareToDeleteAlbum)
+        } header: {
+            Text("マイアルバム")
+                .font(.caption)
+                .fontWeight(.bold)
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    @ViewBuilder
+    private var serverSections: some View {
+        if let server = serverManager.server, let address = server.address {
+            if serverManager.isLoading {
+                Section {
+                    HStack { Spacer(); ProgressView(); Spacer() }
+                } header: {
+                    serverHeader(name: server.name)
+                }
+            } else if let errorMessage = serverManager.errorMessage {
+                Section {
+                    Text(errorMessage).foregroundColor(.secondary)
+                } header: {
+                    serverHeader(name: server.name)
+                }
+            } else {
+                serverLoadedContent(serverName: server.name, address: address)
+            }
+        } else {
+            Section {
+                Text("同じWi-Fi内でサーバーが見つかりません")
+                    .foregroundColor(.secondary)
+            } header: {
+                Text("Mac サーバー")
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func serverLoadedContent(serverName: String, address: String) -> some View {
+        // ★ 1. ライブラリ (ALL VIDEOS と ALL PHOTOS)
+        let libraryAlbums = serverManager.albums.filter { $0.name == "ALL VIDEOS" || $0.name == "ALL PHOTOS" }
+        
+        if !libraryAlbums.isEmpty {
+            Section {
+                ForEach(libraryAlbums) { album in
+                    let isPhoto = album.name == "ALL PHOTOS"
+                    serverAlbumRow(
+                        album: album,
+                        address: address,
+                        icon: isPhoto ? "photo.on.rectangle.fill" : "film.stack.fill",
+                        color: isPhoto ? .orange : .yellow
+                    )
+                }
+            } header: {
+                serverHeader(name: "\(serverName) ライブラリ")
+            }
+        }
+        
+        // ★ 2. 動画アルバム (ユーザー作成)
+        // 条件: タイプがvideo(またはnil) かつ システムアルバムでない
+        let videoAlbums = serverManager.albums.filter {
+            ($0.type == "video" || $0.type == nil) &&
+            $0.name != "ALL VIDEOS" && $0.name != "ALL PHOTOS"
+        }
+        
+        if !videoAlbums.isEmpty {
+            Section {
+                ForEach(videoAlbums) { album in
+                    serverAlbumRow(album: album, address: address, icon: "folder.fill", color: .cyan)
+                }
+            } header: {
+                Text("動画アルバム")
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundColor(.secondary)
+            }
+        }
+        
+        // ★ 3. 画像アルバム (ユーザー作成)
+        // 条件: タイプがphoto かつ システムアルバムでない
+        let photoAlbums = serverManager.albums.filter {
+            $0.type == "photo" &&
+            $0.name != "ALL VIDEOS" && $0.name != "ALL PHOTOS"
+        }
+        
+        if !photoAlbums.isEmpty {
+            Section {
+                ForEach(photoAlbums) { album in
+                    serverAlbumRow(album: album, address: address, icon: "photo.on.rectangle.fill", color: .orange)
+                }
+            } header: {
+                Text("画像アルバム")
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundColor(.secondary)
+            }
+        }
+        
+        if libraryAlbums.isEmpty && videoAlbums.isEmpty && photoAlbums.isEmpty {
+            Section {
+                Text("アルバムがありません")
+                    .foregroundColor(.secondary)
+            } header: {
+                serverHeader(name: serverName)
+            }
+        }
+    }
+    
+    private func serverHeader(name: String) -> some View {
+        Text(name)
+            .font(.caption)
+            .fontWeight(.bold)
+            .foregroundColor(accentGlowColor)
+    }
+    
+    private func serverAlbumRow(album: RemoteAlbumInfo, address: String, icon: String, color: Color) -> some View {
+        NavigationLink(destination: RemoteVideoListView(serverName: album.name, serverAddress: address, albumID: album.id)) {
+            HStack {
+                Image(systemName: icon)
+                    .foregroundColor(color)
+                    .font(.title3)
+                    .frame(width: 30)
+                Text(album.name)
+                Spacer()
+                Text("\(album.videoCount)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.white.opacity(0.1))
+                    .cornerRadius(4)
             }
         }
     }

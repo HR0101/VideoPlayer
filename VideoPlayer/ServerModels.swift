@@ -2,13 +2,11 @@ import Foundation
 import Network
 
 // ===================================
-//  ServerModels.swift (修正版)
+//  ServerModels.swift
 // ===================================
-// サーバーとの通信や発見に関する、共有データモデルを全て定義します。
 
 // MARK: - Bonjour / Server Discovery
 
-/// 発見したサーバーの情報を保持するデータ形式
 struct DiscoveredServer: Identifiable, Hashable {
     let id = UUID()
     let name: String
@@ -16,11 +14,9 @@ struct DiscoveredServer: Identifiable, Hashable {
     var address: String?
 }
 
-/// Bonjourサービスを検索・解決するクラス
 @MainActor
 class ServerBrowser: NSObject, ObservableObject, NetServiceBrowserDelegate, NetServiceDelegate {
     @Published var discoveredServers: [DiscoveredServer] = []
-    
     private let browser = NetServiceBrowser()
     
     override init() {
@@ -52,41 +48,45 @@ class ServerBrowser: NSObject, ObservableObject, NetServiceBrowserDelegate, NetS
     
     func netServiceDidResolveAddress(_ sender: NetService) {
         guard let host = sender.hostName,
-              let index = discoveredServers.firstIndex(where: { $0.service == sender }) else {
-            return
-        }
+              let index = discoveredServers.firstIndex(where: { $0.service == sender }) else { return }
         
-        // ★ 修正: ハードコードされたポート番号をやめ、Bonjourサービスから解決した正しいポート番号を使用します。
         let port = sender.port
         let addressString = "http://\(host):\(port)"
         
-        // メインスレッドでdiscoveredServersを更新します
         DispatchQueue.main.async {
-            // 配列のインデックスが存在するか再度確認
             guard self.discoveredServers.indices.contains(index) else { return }
             self.discoveredServers[index].address = addressString
-            print("✅ サーバーを発見し、アドレスを解決しました: \(addressString)")
         }
     }
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
-        print("❌ サーバーのアドレス解決に失敗しました \(sender.name): \(errorDict)")
-        // 解決に失敗したサーバーをリストから削除
         discoveredServers.removeAll { $0.service == sender }
     }
 }
 
 // MARK: - Server Data Models
 
-/// サーバーから受け取るアルバム情報のデータ形式
 struct RemoteAlbumInfo: Codable, Identifiable, Hashable {
     let id: String
     let name: String
-    // ★ 追加: Macアプリから送られてくる動画の数
     let videoCount: Int
+    // ★ ここが重要：サーバーからタイプを受け取る
+    let type: String?
 }
 
-/// 発見したサーバーとそのアルバムを管理するためのクラス
+struct RemoteVideoInfo: Codable, Identifiable, Hashable {
+    let id: String
+    let filename: String
+    let duration: TimeInterval
+    let importDate: Date
+    let creationDate: Date?
+    let mediaType: String?
+    
+    var isPhoto: Bool {
+        return mediaType == "photo"
+    }
+}
+
 @MainActor
 class ServerManager: ObservableObject {
     @Published var server: DiscoveredServer?
@@ -122,11 +122,10 @@ class ServerManager: ObservableObject {
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601 // Mac側と日付の形式を合わせる
+            decoder.dateDecodingStrategy = .iso8601
             self.albums = try decoder.decode([RemoteAlbumInfo].self, from: data)
         } catch {
             errorMessage = "サーバーアルバムの取得に失敗しました。"
-            print(error.localizedDescription)
         }
         isLoading = false
     }

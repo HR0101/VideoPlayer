@@ -1,31 +1,235 @@
 import SwiftUI
 import AVKit
-import UIKit // シェイクジェスチャーの検知に必要
+import UIKit
 
 // ===================================
-//  RemoteVideoListView.swift (デザイン修正版)
+//  RemoteVideoListView.swift (画像ビューアー機能強化版)
 // ===================================
 
-struct RemoteVideoInfo: Codable, Identifiable, Hashable {
-    let id: String
-    let filename: String
-    let duration: TimeInterval
-    let importDate: Date
-    // ★ 追加: 撮影日時
-    let creationDate: Date?
+struct RemoteVideoListView: View {
+    let serverName: String
+    let serverAddress: String
+    let albumID: String
+    
+    @State private var videos: [RemoteVideoInfo] = []
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+    @State private var searchText = ""
+    
+    // 動画再生用
+    @State private var videoToPlay: IdentifiableURL?
+    
+    // ★ 画像ビューアー用: リスト管理
+    @State private var isPhotoViewerPresented = false
+    @State private var viewerPhotos: [RemoteVideoInfo] = [] // ビューアーに渡す写真リスト
+    @State private var viewerInitialIndex: Int = 0          // 最初に表示するインデックス
+    
+    // 長押しで表示する動画情報を保持
+    @State private var videoForInfoSheet: RemoteVideoInfo?
+    
+    enum SortOrder: String, CaseIterable {
+        case dateDescending = "新しい順"
+        case dateAscending = "古い順"
+        case durationDescending = "長い順"
+        case durationAscending = "短い順"
+    }
+    @State private var currentSortOrder: SortOrder = .dateDescending
+    @State private var isRefreshing = false
+
+    private let columns = [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)]
+    
+    private let primaryDarkColor = Color(red: 0.1, green: 0.1, blue: 0.1)
+    private let accentGlowColor = Color.cyan
+
+    private var sortedAndFilteredVideos: [RemoteVideoInfo] {
+        let filtered = searchText.isEmpty ? videos : videos.filter { $0.filename.localizedCaseInsensitiveContains(searchText) }
+        
+        switch currentSortOrder {
+        case .dateDescending:
+            return filtered.sorted { ($0.creationDate ?? $0.importDate) > ($1.creationDate ?? $1.importDate) }
+        case .dateAscending:
+            return filtered.sorted { ($0.creationDate ?? $0.importDate) < ($1.creationDate ?? $1.importDate) }
+        case .durationDescending:
+            return filtered.sorted { $0.duration > $1.duration }
+        case .durationAscending:
+            return filtered.sorted { $0.duration < $1.duration }
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            primaryDarkColor.ignoresSafeArea()
+            Group {
+                if isLoading || isRefreshing {
+                    ProgressView()
+                        .tint(.white)
+                } else if let errorMessage = errorMessage {
+                    placeholderView(icon: "xmark.icloud.fill", title: "エラー", message: errorMessage)
+                } else if videos.isEmpty {
+                    placeholderView(icon: "film.fill", title: "メディアがありません", message: "Macサーバーアプリに動画や画像をインポートしてください。")
+                } else {
+                    videoGrid
+                }
+            }
+        }
+        .navigationTitle(serverName)
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, prompt: "検索")
+        .toolbarColorScheme(.dark, for: .navigationBar)
+        .toolbarBackground(primaryDarkColor, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                Button(action: {
+                    Task { await fetchVideosFromServer() }
+                }) {
+                    Label("再読み込み", systemImage: "arrow.clockwise")
+                        .foregroundColor(accentGlowColor)
+                }
+                
+                Menu {
+                    Picker("並び替え", selection: $currentSortOrder) {
+                        ForEach(SortOrder.allCases, id: \.self) { order in
+                            Text(order.rawValue).tag(order)
+                        }
+                    }
+                } label: {
+                    Label("並び替え", systemImage: "arrow.up.arrow.down.circle")
+                        .foregroundColor(accentGlowColor)
+                }
+            }
+        }
+        // 動画プレイヤー
+        .fullScreenCover(item: $videoToPlay) { identifiableUrl in
+            DraggablePlayerView(url: identifiableUrl.url, videoToPlay: $videoToPlay)
+        }
+        // ★ 画像ビューアー（リストを渡す方式に変更）
+        .fullScreenCover(isPresented: $isPhotoViewerPresented) {
+            RemotePhotoViewer(
+                videos: viewerPhotos,
+                serverAddress: serverAddress,
+                initialIndex: viewerInitialIndex,
+                isPresented: $isPhotoViewerPresented
+            )
+        }
+        // 詳細シート
+        .sheet(item: $videoForInfoSheet) { video in
+            VideoInfoSheetView(video: video, serverAddress: serverAddress)
+        }
+        .task {
+            if videos.isEmpty {
+                isLoading = true
+                await fetchVideosFromServer()
+                isLoading = false
+            }
+        }
+        .onShake(perform: playRandomVideo)
+    }
+    
+    private var videoGrid: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 2) {
+                ForEach(sortedAndFilteredVideos) { video in
+                    thumbnailCell(for: video)
+                }
+            }
+        }
+        .refreshable { await fetchVideosFromServer() }
+    }
+    
+    @ViewBuilder
+    private func thumbnailCell(for video: RemoteVideoInfo) -> some View {
+        RemoteVideoThumbnailView(
+            thumbnailURL: URL(string: "\(serverAddress)/thumbnail/\(video.id)")!,
+            duration: video.duration,
+            isPhoto: video.isPhoto
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if video.isPhoto {
+                // ★ 写真の場合：現在の表示順で写真のみをリストアップしてビューアーに渡す
+                let photos = sortedAndFilteredVideos.filter { $0.isPhoto }
+                if let index = photos.firstIndex(where: { $0.id == video.id }) {
+                    self.viewerPhotos = photos
+                    self.viewerInitialIndex = index
+                    self.isPhotoViewerPresented = true
+                }
+            } else {
+                // 動画の場合
+                if let videoURL = URL(string: "\(serverAddress)/video/\(video.id)") {
+                    self.videoToPlay = IdentifiableURL(url: videoURL)
+                }
+            }
+        }
+        .onLongPressGesture {
+            self.videoForInfoSheet = video
+        }
+    }
+
+    private func placeholderView(icon: String, title: String, message: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 50))
+                .foregroundColor(.white.opacity(0.6))
+            Text(title)
+                .font(.title2.weight(.bold))
+                .foregroundColor(.white)
+            Text(message)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center).padding(.horizontal)
+        }
+        .padding()
+    }
+    
+    private func fetchVideosFromServer() async {
+        isRefreshing = true
+        defer { isRefreshing = false }
+        
+        guard let url = URL(string: "\(serverAddress)/albums/\(albumID)/videos") else {
+            errorMessage = "無効なURLです。"
+            return
+        }
+        
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        let session = URLSession(configuration: config)
+        
+        do {
+            errorMessage = nil
+            let (data, _) = try await session.data(from: url)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            self.videos = try decoder.decode([RemoteVideoInfo].self, from: data)
+        } catch {
+            errorMessage = "リストの取得に失敗しました。\n\(error.localizedDescription)"
+        }
+    }
+
+    private func playRandomVideo() {
+        guard videoToPlay == nil && !isPhotoViewerPresented else { return }
+        let movieVideos = sortedAndFilteredVideos.filter { !$0.isPhoto }
+        guard let randomVideo = movieVideos.randomElement() else { return }
+        
+        if let videoURL = URL(string: "\(serverAddress)/video/\(randomVideo.id)") {
+            self.videoToPlay = IdentifiableURL(url: videoURL)
+        }
+    }
 }
+
+// MARK: - Subviews & Components
 
 private struct RemoteVideoThumbnailView: View {
     let thumbnailURL: URL
     let duration: TimeInterval
+    let isPhoto: Bool
     
-    // ★ 追加: カスタムカラー定義
     private let primaryDarkColor = Color(red: 0.1, green: 0.1, blue: 0.1)
     
     var body: some View {
         ZStack {
             Rectangle()
-                // ★ 修正: 背景色を統一感のあるダークカラーに
                 .fill(primaryDarkColor.opacity(0.8))
 
             AsyncImage(url: thumbnailURL) { phase in
@@ -33,27 +237,25 @@ private struct RemoteVideoThumbnailView: View {
                 case .success(let image):
                     image.resizable().aspectRatio(contentMode: .fill)
                 case .failure:
-                    Image(systemName: "wifi.exclamationmark").font(.title3).foregroundColor(.secondary)
+                    Image(systemName: "photo").font(.title3).foregroundColor(.secondary)
                 default:
                     ProgressView()
                 }
             }
         }
         .aspectRatio(1, contentMode: .fit)
-        .cornerRadius(12) // ★ 修正: 角丸を追加
+        .cornerRadius(12)
         .clipped()
-        // ★ 追加: サムネイルを浮き立たせる影
         .shadow(color: Color.black.opacity(0.4), radius: 6, x: 3, y: 3)
         .shadow(color: Color.white.opacity(0.05), radius: 3, x: -1, y: -1)
         
         .overlay(alignment: .bottomTrailing) {
-            if duration > 0 {
+            if !isPhoto && duration > 0 {
                 Text(formatDuration(duration))
                     .font(.caption.weight(.semibold))
                     .foregroundColor(.white)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
-                    // ★ 修正: 背景をより濃いぼかしに
                     .background(.ultraThinMaterial.opacity(0.8))
                     .cornerRadius(4)
                     .padding(4)
@@ -73,7 +275,6 @@ private struct DraggablePlayerView: View {
     let url: URL
     @Binding var videoToPlay: IdentifiableURL?
     @StateObject private var playerManager: PlayerManager
-    
     @State private var dragOffset: CGSize = .zero
 
     init(url: URL, videoToPlay: Binding<IdentifiableURL?>) {
@@ -112,7 +313,243 @@ private struct DraggablePlayerView: View {
     }
 }
 
-// ★ 新規追加: 動画情報シート
+// ★ 修正: 左右タップによる移動機能を追加したフォトビューアー
+private struct RemotePhotoViewer: View {
+    let videos: [RemoteVideoInfo]
+    let serverAddress: String
+    let initialIndex: Int
+    @Binding var isPresented: Bool
+    
+    @State private var currentIndex: Int
+    @State private var image: UIImage?
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+    
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+    
+    init(videos: [RemoteVideoInfo], serverAddress: String, initialIndex: Int, isPresented: Binding<Bool>) {
+        self.videos = videos
+        self.serverAddress = serverAddress
+        self.initialIndex = initialIndex
+        self._isPresented = isPresented
+        // Stateの初期化
+        self._currentIndex = State(initialValue: initialIndex)
+    }
+    
+    // 現在の画像のURLを計算
+    private var currentURL: URL? {
+        guard videos.indices.contains(currentIndex) else { return nil }
+        return URL(string: "\(serverAddress)/video/\(videos[currentIndex].id)")
+    }
+    
+    var body: some View {
+        ZStack {
+            Color.black.edgesIgnoringSafeArea(.all)
+            
+            if let image = image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .scaleEffect(scale)
+                    .offset(offset)
+                    .gesture(
+                        MagnificationGesture()
+                            .onChanged { val in
+                                let delta = val / lastScale
+                                lastScale = val
+                                scale *= delta
+                            }
+                            .onEnded { _ in
+                                lastScale = 1.0
+                                if scale < 1.0 { withAnimation { scale = 1.0 } }
+                            }
+                    )
+                    // ドラッグでの位置移動（拡大中のみ）
+                    .simultaneousGesture(
+                        DragGesture()
+                            .onChanged { val in
+                                if scale > 1 {
+                                    offset = CGSize(width: lastOffset.width + val.translation.width,
+                                                    height: lastOffset.height + val.translation.height)
+                                } else {
+                                    // 縮小時は下に引っ張って閉じる挙動
+                                    offset = val.translation
+                                }
+                            }
+                            .onEnded { val in
+                                if scale > 1 {
+                                    lastOffset = offset
+                                } else {
+                                    if val.translation.height > 100 {
+                                        isPresented = false
+                                    } else {
+                                        withAnimation { offset = .zero }
+                                    }
+                                }
+                            }
+                    )
+            } else if isLoading {
+                VStack {
+                    ProgressView()
+                        .tint(.white)
+                    Text("画像を読み込み中...")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .padding(.top, 8)
+                }
+            } else if let errorMessage = errorMessage {
+                VStack(spacing: 16) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.largeTitle)
+                        .foregroundColor(.yellow)
+                    Text("画像を読み込めませんでした")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    
+                    Button(action: {
+                        Task { await loadImage(isRetry: true) }
+                    }) {
+                        Text("再試行")
+                            .fontWeight(.bold)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 10)
+                            .background(Color.white.opacity(0.2))
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                    }
+                }
+            }
+            
+            // ★ 左右のタップ領域 (拡大していない時のみ有効)
+            if scale == 1.0 {
+                HStack {
+                    // 左側1/3 (前へ)
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .frame(maxWidth: UIScreen.main.bounds.width / 3)
+                        .onTapGesture {
+                            if currentIndex > 0 {
+                                withAnimation {
+                                    currentIndex -= 1
+                                    resetZoom()
+                                }
+                            }
+                        }
+                    
+                    Spacer()
+                    
+                    // 右側1/3 (次へ)
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .frame(maxWidth: UIScreen.main.bounds.width / 3)
+                        .onTapGesture {
+                            if currentIndex < videos.count - 1 {
+                                withAnimation {
+                                    currentIndex += 1
+                                    resetZoom()
+                                }
+                            }
+                        }
+                }
+            }
+            
+            // 閉じるボタン
+            VStack {
+                HStack {
+                    Spacer()
+                    Button(action: { isPresented = false }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.largeTitle)
+                            .foregroundColor(.white.opacity(0.8))
+                            .padding()
+                    }
+                }
+                Spacer()
+            }
+            
+            // 現在位置のインジケーター (例: 1/10)
+            if !isLoading {
+                VStack {
+                    Spacer()
+                    Text("\(currentIndex + 1) / \(videos.count)")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.8))
+                        .padding(6)
+                        .background(Color.black.opacity(0.5))
+                        .cornerRadius(8)
+                        .padding(.bottom, 20)
+                }
+            }
+        }
+        .task {
+            // 初回読み込み
+            await loadImage()
+        }
+        // インデックスが変わったら画像を再読み込み
+        .onChange(of: currentIndex) { _ in
+            Task { await loadImage() }
+        }
+    }
+    
+    private func resetZoom() {
+        scale = 1.0
+        lastScale = 1.0
+        offset = .zero
+        lastOffset = .zero
+    }
+    
+    private func loadImage(isRetry: Bool = false) async {
+        guard let url = currentURL else { return }
+        
+        // 画像切り替え時に一瞬ローディングにする
+        isLoading = true
+        errorMessage = nil
+        image = nil // 前の画像をクリア
+        
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 60
+        config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        
+        let session = URLSession(configuration: config)
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("close", forHTTPHeaderField: "Connection")
+        
+        do {
+            let (data, response) = try await session.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+                throw NSError(domain: "NetworkError", code: 0, userInfo: [NSLocalizedDescriptionKey: "サーバーエラー"])
+            }
+            
+            guard let loadedImage = UIImage(data: data) else {
+                throw NSError(domain: "ImageError", code: 0, userInfo: [NSLocalizedDescriptionKey: "画像データ破損"])
+            }
+            
+            self.image = loadedImage
+            
+        } catch {
+            let nsError = error as NSError
+            if nsError.code == -1005 && !isRetry {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                await loadImage(isRetry: true)
+                return
+            }
+            self.errorMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+}
+
 private struct VideoInfoSheetView: View {
     let video: RemoteVideoInfo
     let serverAddress: String
@@ -124,64 +561,52 @@ private struct VideoInfoSheetView: View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 20) {
-                    // 大きめのサムネイル
                     RemoteVideoThumbnailView(
                         thumbnailURL: URL(string: "\(serverAddress)/thumbnail/\(video.id)")!,
-                        duration: video.duration
+                        duration: video.duration,
+                        isPhoto: video.isPhoto
                     )
                     .aspectRatio(16/9, contentMode: .fit)
-                    .cornerRadius(16) // さらに大きな角丸
+                    .cornerRadius(16)
                     .shadow(radius: 8)
                     .padding(.horizontal)
                     .padding(.top, 20)
 
-                    // 動画情報
                     VStack(alignment: .leading, spacing: 15) {
                         InfoRow(title: "ファイル名", value: video.filename, isMain: true)
-                        
                         Divider().background(Color.gray.opacity(0.3))
-
                         HStack {
-                            VStack(alignment: .leading) {
-                                Text("長さ")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text(formatDuration(video.duration))
-                                    .font(.subheadline.weight(.semibold))
+                            if !video.isPhoto {
+                                VStack(alignment: .leading) {
+                                    Text("長さ").font(.caption).foregroundColor(.secondary)
+                                    Text(formatDuration(video.duration)).font(.subheadline.weight(.semibold))
+                                }
+                                Spacer()
                             }
-                            Spacer()
                             VStack(alignment: .leading) {
-                                Text("インポート日")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text(video.importDate, style: .date)
-                                    .font(.subheadline.weight(.semibold))
+                                Text("インポート日").font(.caption).foregroundColor(.secondary)
+                                Text(video.importDate, style: .date).font(.subheadline.weight(.semibold))
                             }
-                            Spacer()
+                            if !video.isPhoto { Spacer() }
                         }
-                        
                         if let creationDate = video.creationDate {
                             Divider().background(Color.gray.opacity(0.3))
-                            
                             VStack(alignment: .leading) {
-                                Text("撮影日時")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text(creationDate, style: .date)
-                                    .font(.subheadline.weight(.semibold))
+                                Text("撮影日時").font(.caption).foregroundColor(.secondary)
+                                Text(creationDate, style: .date).font(.subheadline.weight(.semibold))
                             }
                         }
-                        
+                        Divider().background(Color.gray.opacity(0.3))
+                        InfoRow(title: "種類", value: video.isPhoto ? "画像" : "動画", isMain: false)
                     }
                     .padding(20)
-                    .background(.thickMaterial) // 詳細シートの背景にぼかし
+                    .background(.thickMaterial)
                     .cornerRadius(16)
                     .padding(.horizontal)
-
                     Spacer()
                 }
             }
-            .background(primaryDarkColor.ignoresSafeArea()) // 背景色を統一
+            .background(primaryDarkColor.ignoresSafeArea())
             .navigationTitle("詳細情報")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
@@ -189,28 +614,20 @@ private struct VideoInfoSheetView: View {
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("完了") {
-                        dismiss()
-                    }
-                    .foregroundColor(.cyan)
+                    Button("完了") { dismiss() }.foregroundColor(.cyan)
                 }
             }
         }
     }
     
-    // ヘルパー構造体
     private struct InfoRow: View {
         let title: String
         let value: String
         var isMain: Bool = false
-        
         var body: some View {
             VStack(alignment: .leading, spacing: 5) {
-                Text(title)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text(value)
-                    .font(isMain ? .headline.weight(.bold) : .subheadline.weight(.semibold))
+                Text(title).font(.caption).foregroundColor(.secondary)
+                Text(value).font(isMain ? .headline.weight(.bold) : .subheadline.weight(.semibold))
             }
         }
     }
@@ -228,238 +645,27 @@ private struct VideoInfoSheetView: View {
     }
 }
 
-struct RemoteVideoListView: View {
-    let serverName: String
-    let serverAddress: String
-    let albumID: String
-    
-    @State private var videos: [RemoteVideoInfo] = []
-    @State private var isLoading = true
-    @State private var errorMessage: String?
-    @State private var videoToPlay: IdentifiableURL?
-    @State private var searchText = ""
-    
-    // ★ 追加: 長押しで表示する動画情報を保持
-    @State private var videoForInfoSheet: RemoteVideoInfo?
-    
-    enum SortOrder: String, CaseIterable {
-        case dateDescending = "新しい順"
-        case dateAscending = "古い順"
-        case durationDescending = "長い順"
-        case durationAscending = "短い順"
-    }
-    @State private var currentSortOrder: SortOrder = .dateDescending
-    @State private var isRefreshing = false
-
-    private let columns = [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)]
-    
-    private let primaryDarkColor = Color(red: 0.1, green: 0.1, blue: 0.1)
-    private let accentGlowColor = Color.cyan
-
-    private var sortedAndFilteredVideos: [RemoteVideoInfo] {
-        let filtered = searchText.isEmpty ? videos : videos.filter { $0.filename.localizedCaseInsensitiveContains(searchText) }
-        
-        switch currentSortOrder {
-        case .dateDescending:
-            // ★ 修正: 撮影日時があればそれを優先し、なければインポート日時で並び替え
-            return filtered.sorted { ($0.creationDate ?? $0.importDate) > ($1.creationDate ?? $1.importDate) }
-        case .dateAscending:
-            // ★ 修正: 撮影日時があればそれを優先し、なければインポート日時で並び替え
-            return filtered.sorted { ($0.creationDate ?? $0.importDate) < ($1.creationDate ?? $1.importDate) }
-        case .durationDescending:
-            return filtered.sorted { $0.duration > $1.duration }
-        case .durationAscending:
-            return filtered.sorted { $0.duration < $1.duration }
-        }
-    }
-
-    var body: some View {
-        ZStack {
-            // ★ 修正: 背景色を統一
-            primaryDarkColor.ignoresSafeArea()
-            Group {
-                if isLoading || isRefreshing {
-                    ProgressView()
-                        .tint(.white)
-                } else if let errorMessage = errorMessage {
-                    placeholderView(icon: "xmark.icloud.fill", title: "エラー", message: errorMessage)
-                } else if videos.isEmpty {
-                    placeholderView(icon: "film.fill", title: "動画がありません", message: "Macサーバーアプリに動画をインポートしてください。")
-                } else {
-                    videoGrid
-                }
-            }
-        }
-        .navigationTitle(serverName)
-        .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $searchText, prompt: "ビデオを検索")
-        .toolbarColorScheme(.dark, for: .navigationBar)
-        .toolbarBackground(primaryDarkColor, for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
-        .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                Button(action: {
-                    Task {
-                        await fetchVideosFromServer()
-                    }
-                }) {
-                    Label("再読み込み", systemImage: "arrow.clockwise")
-                        .foregroundColor(accentGlowColor)
-                }
-                
-                Menu {
-                    Picker("並び替え", selection: $currentSortOrder) {
-                        ForEach(SortOrder.allCases, id: \.self) { order in
-                            Text(order.rawValue).tag(order)
-                        }
-                    }
-                } label: {
-                    Label("並び替え", systemImage: "arrow.up.arrow.down.circle")
-                        .foregroundColor(accentGlowColor)
-                }
-            }
-        }
-        .fullScreenCover(item: $videoToPlay) { identifiableUrl in
-            DraggablePlayerView(url: identifiableUrl.url, videoToPlay: $videoToPlay)
-        }
-        // ★ 追加: 動画情報シート
-        .sheet(item: $videoForInfoSheet) { video in
-            VideoInfoSheetView(video: video, serverAddress: serverAddress)
-        }
-        .task {
-            if videos.isEmpty {
-                isLoading = true
-                await fetchVideosFromServer()
-                isLoading = false
-            }
-        }
-        .onShake(perform: playRandomVideo)
-    }
-    
-    private var videoGrid: some View {
-        ScrollView {
-            LazyVGrid(columns: columns, spacing: 2) {
-                ForEach(sortedAndFilteredVideos) { video in
-                    thumbnailCell(for: video)
-                }
-            }
-        }
-        .refreshable { await fetchVideosFromServer() }
-    }
-    
-    @ViewBuilder
-    private func thumbnailCell(for video: RemoteVideoInfo) -> some View {
-        // ★ 修正: Buttonをジェスチャーを持つビューに変更
-        RemoteVideoThumbnailView(
-            thumbnailURL: URL(string: "\(serverAddress)/thumbnail/\(video.id)")!,
-            duration: video.duration
-        )
-        .onTapGesture {
-            if let videoURL = URL(string: "\(serverAddress)/video/\(video.id)") {
-                self.videoToPlay = IdentifiableURL(url: videoURL)
-            }
-        }
-        .onLongPressGesture {
-            self.videoForInfoSheet = video
-        }
-    }
-
-    private func placeholderView(icon: String, title: String, message: String) -> some View {
-        VStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 50))
-                // ★ 修正: アイコン色を白に
-                .foregroundColor(.white.opacity(0.6))
-            Text(title)
-                .font(.title2.weight(.bold))
-                .foregroundColor(.white)
-            Text(message)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center).padding(.horizontal)
-        }
-        .padding()
-    }
-    
-    private func fetchVideosFromServer() async {
-        isRefreshing = true
-        defer { isRefreshing = false }
-        
-        guard let url = URL(string: "\(serverAddress)/albums/\(albumID)/videos") else {
-            errorMessage = "無効なURLです。"
-            return
-        }
-        do {
-            errorMessage = nil
-            let (data, _) = try await URLSession.shared.data(from: url)
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            self.videos = try decoder.decode([RemoteVideoInfo].self, from: data)
-        } catch {
-            errorMessage = "動画リストの取得に失敗しました。\n\(error.localizedDescription)"
-        }
-    }
-
-    private func playRandomVideo() {
-        guard videoToPlay == nil else { return }
-        
-        guard let randomVideo = sortedAndFilteredVideos.randomElement() else {
-            print("ランダム再生するビデオがありません。")
-            return
-        }
-        
-        if let videoURL = URL(string: "\(serverAddress)/video/\(randomVideo.id)") {
-            self.videoToPlay = IdentifiableURL(url: videoURL)
-        }
-    }
-}
-
 // MARK: - Shake Gesture Components
-
 private class ShakeDetectingUIView: UIView {
     var onShake: () -> Void = {}
-
-    override var canBecomeFirstResponder: Bool {
-        return true
-    }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        self.becomeFirstResponder()
-    }
-
+    override var canBecomeFirstResponder: Bool { return true }
+    override func didMoveToWindow() { super.didMoveToWindow(); self.becomeFirstResponder() }
     override func motionEnded(_ motion: UIEvent.EventSubtype, with event: UIEvent?) {
-        if motion == .motionShake {
-            onShake()
-        }
+        if motion == .motionShake { onShake() }
         super.motionEnded(motion, with: event)
     }
 }
-
 private struct ShakeDetector: UIViewRepresentable {
     let onShake: () -> Void
-
     func makeUIView(context: Context) -> ShakeDetectingUIView {
-        let view = ShakeDetectingUIView()
-        view.onShake = onShake
-        return view
+        let view = ShakeDetectingUIView(); view.onShake = onShake; return view
     }
-
-    func updateUIView(_ uiView: ShakeDetectingUIView, context: Context) {
-        uiView.onShake = onShake
-    }
+    func updateUIView(_ uiView: ShakeDetectingUIView, context: Context) { uiView.onShake = onShake }
 }
-
 private struct ShakeViewModifier: ViewModifier {
     let onShake: () -> Void
-
-    func body(content: Content) -> some View {
-        content.background(ShakeDetector(onShake: onShake).frame(width: 0, height: 0))
-    }
+    func body(content: Content) -> some View { content.background(ShakeDetector(onShake: onShake).frame(width: 0, height: 0)) }
 }
-
 extension View {
-    func onShake(perform action: @escaping () -> Void) -> some View {
-        self.modifier(ShakeViewModifier(onShake: action))
-    }
+    func onShake(perform action: @escaping () -> Void) -> some View { self.modifier(ShakeViewModifier(onShake: action)) }
 }

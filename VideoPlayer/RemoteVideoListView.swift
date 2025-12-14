@@ -3,8 +3,80 @@ import AVKit
 import UIKit
 
 // ===================================
-//  RemoteVideoListView.swift (画像ビューアー機能強化版)
+//  RemoteVideoListView.swift (リトライ機能強化版)
 // ===================================
+
+// ★ 新規追加: 自動リトライ機能付き画像ビュー
+struct RetryableRemoteImage: View {
+    let url: URL
+    @State private var image: UIImage?
+    
+    // アニメーション用
+    @State private var opacity: Double = 0
+    
+    var body: some View {
+        ZStack {
+            if let image = image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .opacity(opacity)
+            } else {
+                // ロード中プレースホルダー
+                ZStack {
+                    Color(red: 0.15, green: 0.15, blue: 0.15)
+                    ProgressView().tint(.white)
+                }
+            }
+        }
+        .onAppear {
+            loadImage()
+        }
+    }
+    
+    private func loadImage() {
+        if image != nil { return } // 読み込み済みならスキップ
+        
+        Task {
+            // キャッシュを無視して最新を取得（サーバー側で生成完了しているかもしれないため）
+            var request = URLRequest(url: url)
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.timeoutInterval = 15
+            
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                
+                guard let httpResponse = response as? HTTPURLResponse else { return }
+                
+                if httpResponse.statusCode == 200 {
+                    // 成功: 画像を表示
+                    if let uiImage = UIImage(data: data) {
+                        await MainActor.run {
+                            withAnimation(.easeIn(duration: 0.3)) {
+                                self.image = uiImage
+                                self.opacity = 1.0
+                            }
+                        }
+                    }
+                } else if httpResponse.statusCode == 202 {
+                    // 202 Accepted: サーバーで生成中 -> 少し待ってリトライ
+                    // プレースホルダーデータが入っている場合は一旦それを表示してもいいが、
+                    // ここでは完了までローディングを維持しつつリトライする
+                    try? await Task.sleep(nanoseconds: 2_000_000_000) // 2秒待機
+                    loadImage()
+                } else {
+                    // その他のエラー: 少し待ってリトライ（通信エラー等）
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    loadImage()
+                }
+            } catch {
+                // 通信エラー時もリトライ
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                loadImage()
+            }
+        }
+    }
+}
 
 struct RemoteVideoListView: View {
     let serverName: String
@@ -16,15 +88,13 @@ struct RemoteVideoListView: View {
     @State private var errorMessage: String?
     @State private var searchText = ""
     
-    // 動画再生用
     @State private var videoToPlay: IdentifiableURL?
     
-    // ★ 画像ビューアー用: リスト管理
+    // 画像ビューアー用
     @State private var isPhotoViewerPresented = false
-    @State private var viewerPhotos: [RemoteVideoInfo] = [] // ビューアーに渡す写真リスト
-    @State private var viewerInitialIndex: Int = 0          // 最初に表示するインデックス
+    @State private var viewerPhotos: [RemoteVideoInfo] = []
+    @State private var viewerInitialIndex: Int = 0
     
-    // 長押しで表示する動画情報を保持
     @State private var videoForInfoSheet: RemoteVideoInfo?
     
     enum SortOrder: String, CaseIterable {
@@ -37,7 +107,6 @@ struct RemoteVideoListView: View {
     @State private var isRefreshing = false
 
     private let columns = [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)]
-    
     private let primaryDarkColor = Color(red: 0.1, green: 0.1, blue: 0.1)
     private let accentGlowColor = Color.cyan
 
@@ -61,8 +130,7 @@ struct RemoteVideoListView: View {
             primaryDarkColor.ignoresSafeArea()
             Group {
                 if isLoading || isRefreshing {
-                    ProgressView()
-                        .tint(.white)
+                    ProgressView().tint(.white)
                 } else if let errorMessage = errorMessage {
                     placeholderView(icon: "xmark.icloud.fill", title: "エラー", message: errorMessage)
                 } else if videos.isEmpty {
@@ -80,13 +148,10 @@ struct RemoteVideoListView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                Button(action: {
-                    Task { await fetchVideosFromServer() }
-                }) {
+                Button(action: { Task { await fetchVideosFromServer() } }) {
                     Label("再読み込み", systemImage: "arrow.clockwise")
                         .foregroundColor(accentGlowColor)
                 }
-                
                 Menu {
                     Picker("並び替え", selection: $currentSortOrder) {
                         ForEach(SortOrder.allCases, id: \.self) { order in
@@ -99,11 +164,9 @@ struct RemoteVideoListView: View {
                 }
             }
         }
-        // 動画プレイヤー
         .fullScreenCover(item: $videoToPlay) { identifiableUrl in
             DraggablePlayerView(url: identifiableUrl.url, videoToPlay: $videoToPlay)
         }
-        // ★ 画像ビューアー（リストを渡す方式に変更）
         .fullScreenCover(isPresented: $isPhotoViewerPresented) {
             RemotePhotoViewer(
                 videos: viewerPhotos,
@@ -112,7 +175,6 @@ struct RemoteVideoListView: View {
                 isPresented: $isPhotoViewerPresented
             )
         }
-        // 詳細シート
         .sheet(item: $videoForInfoSheet) { video in
             VideoInfoSheetView(video: video, serverAddress: serverAddress)
         }
@@ -139,6 +201,7 @@ struct RemoteVideoListView: View {
     
     @ViewBuilder
     private func thumbnailCell(for video: RemoteVideoInfo) -> some View {
+        // ★ 修正: RetryableRemoteImageを使用
         RemoteVideoThumbnailView(
             thumbnailURL: URL(string: "\(serverAddress)/thumbnail/\(video.id)")!,
             duration: video.duration,
@@ -147,7 +210,6 @@ struct RemoteVideoListView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             if video.isPhoto {
-                // ★ 写真の場合：現在の表示順で写真のみをリストアップしてビューアーに渡す
                 let photos = sortedAndFilteredVideos.filter { $0.isPhoto }
                 if let index = photos.firstIndex(where: { $0.id == video.id }) {
                     self.viewerPhotos = photos
@@ -155,7 +217,6 @@ struct RemoteVideoListView: View {
                     self.isPhotoViewerPresented = true
                 }
             } else {
-                // 動画の場合
                 if let videoURL = URL(string: "\(serverAddress)/video/\(video.id)") {
                     self.videoToPlay = IdentifiableURL(url: videoURL)
                 }
@@ -232,16 +293,8 @@ private struct RemoteVideoThumbnailView: View {
             Rectangle()
                 .fill(primaryDarkColor.opacity(0.8))
 
-            AsyncImage(url: thumbnailURL) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().aspectRatio(contentMode: .fill)
-                case .failure:
-                    Image(systemName: "photo").font(.title3).foregroundColor(.secondary)
-                default:
-                    ProgressView()
-                }
-            }
+            // ★ 修正: 標準のAsyncImageではなく、リトライ機能付きのカスタムビューを使用
+            RetryableRemoteImage(url: thumbnailURL)
         }
         .aspectRatio(1, contentMode: .fit)
         .cornerRadius(12)
@@ -250,6 +303,7 @@ private struct RemoteVideoThumbnailView: View {
         .shadow(color: Color.white.opacity(0.05), radius: 3, x: -1, y: -1)
         
         .overlay(alignment: .bottomTrailing) {
+            // ★ 修正: isPhotoの場合はバッジを表示しない
             if !isPhoto && duration > 0 {
                 Text(formatDuration(duration))
                     .font(.caption.weight(.semibold))
@@ -313,7 +367,6 @@ private struct DraggablePlayerView: View {
     }
 }
 
-// ★ 修正: 左右タップによる移動機能を追加したフォトビューアー
 private struct RemotePhotoViewer: View {
     let videos: [RemoteVideoInfo]
     let serverAddress: String
@@ -335,11 +388,9 @@ private struct RemotePhotoViewer: View {
         self.serverAddress = serverAddress
         self.initialIndex = initialIndex
         self._isPresented = isPresented
-        // Stateの初期化
         self._currentIndex = State(initialValue: initialIndex)
     }
     
-    // 現在の画像のURLを計算
     private var currentURL: URL? {
         guard videos.indices.contains(currentIndex) else { return nil }
         return URL(string: "\(serverAddress)/video/\(videos[currentIndex].id)")
@@ -367,7 +418,6 @@ private struct RemotePhotoViewer: View {
                                 if scale < 1.0 { withAnimation { scale = 1.0 } }
                             }
                     )
-                    // ドラッグでの位置移動（拡大中のみ）
                     .simultaneousGesture(
                         DragGesture()
                             .onChanged { val in
@@ -375,7 +425,6 @@ private struct RemotePhotoViewer: View {
                                     offset = CGSize(width: lastOffset.width + val.translation.width,
                                                     height: lastOffset.height + val.translation.height)
                                 } else {
-                                    // 縮小時は下に引っ張って閉じる挙動
                                     offset = val.translation
                                 }
                             }
@@ -393,8 +442,7 @@ private struct RemotePhotoViewer: View {
                     )
             } else if isLoading {
                 VStack {
-                    ProgressView()
-                        .tint(.white)
+                    ProgressView().tint(.white)
                     Text("画像を読み込み中...")
                         .font(.caption)
                         .foregroundColor(.gray)
@@ -414,9 +462,7 @@ private struct RemotePhotoViewer: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
                     
-                    Button(action: {
-                        Task { await loadImage(isRetry: true) }
-                    }) {
+                    Button(action: { Task { await loadImage(isRetry: true) } }) {
                         Text("再試行")
                             .fontWeight(.bold)
                             .padding(.horizontal, 20)
@@ -428,10 +474,8 @@ private struct RemotePhotoViewer: View {
                 }
             }
             
-            // ★ 左右のタップ領域 (拡大していない時のみ有効)
             if scale == 1.0 {
                 HStack {
-                    // 左側1/3 (前へ)
                     Color.clear
                         .contentShape(Rectangle())
                         .frame(maxWidth: UIScreen.main.bounds.width / 3)
@@ -443,10 +487,7 @@ private struct RemotePhotoViewer: View {
                                 }
                             }
                         }
-                    
                     Spacer()
-                    
-                    // 右側1/3 (次へ)
                     Color.clear
                         .contentShape(Rectangle())
                         .frame(maxWidth: UIScreen.main.bounds.width / 3)
@@ -461,7 +502,6 @@ private struct RemotePhotoViewer: View {
                 }
             }
             
-            // 閉じるボタン
             VStack {
                 HStack {
                     Spacer()
@@ -475,7 +515,6 @@ private struct RemotePhotoViewer: View {
                 Spacer()
             }
             
-            // 現在位置のインジケーター (例: 1/10)
             if !isLoading {
                 VStack {
                     Spacer()
@@ -489,30 +528,20 @@ private struct RemotePhotoViewer: View {
                 }
             }
         }
-        .task {
-            // 初回読み込み
-            await loadImage()
-        }
-        // インデックスが変わったら画像を再読み込み
-        .onChange(of: currentIndex) { _ in
-            Task { await loadImage() }
-        }
+        .task { await loadImage() }
+        .onChange(of: currentIndex) { _ in Task { await loadImage() } }
     }
     
     private func resetZoom() {
-        scale = 1.0
-        lastScale = 1.0
-        offset = .zero
-        lastOffset = .zero
+        scale = 1.0; lastScale = 1.0; offset = .zero; lastOffset = .zero
     }
     
     private func loadImage(isRetry: Bool = false) async {
         guard let url = currentURL else { return }
         
-        // 画像切り替え時に一瞬ローディングにする
         isLoading = true
         errorMessage = nil
-        image = nil // 前の画像をクリア
+        image = nil
         
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 30

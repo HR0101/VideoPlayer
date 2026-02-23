@@ -5,6 +5,80 @@ import Network
 //  ServerModels.swift
 // ===================================
 
+// MARK: - API通信マネージャー (NAS機能用)
+class ServerAPI {
+    
+    /// アルバム作成
+    static func createAlbum(serverAddress: String, name: String, type: String) async throws -> Bool {
+        guard let url = URL(string: "\(serverAddress)/albums/create") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = ["name": name, "type": type]
+        request.httpBody = try JSONEncoder().encode(body)
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        return (response as? HTTPURLResponse)?.statusCode == 200
+    }
+    
+    /// アルバム削除
+    static func deleteAlbum(serverAddress: String, albumID: String) async throws -> Bool {
+        guard let url = URL(string: "\(serverAddress)/albums/\(albumID)") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        return (response as? HTTPURLResponse)?.statusCode == 200
+    }
+    
+    /// メディアの移動
+    static func moveVideos(serverAddress: String, videoIDs: [String], sourceAlbumID: String, targetAlbumID: String) async throws -> Bool {
+        guard let url = URL(string: "\(serverAddress)/move") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        struct MoveReq: Codable { let videoIds: [String]; let sourceAlbumId: String; let targetAlbumId: String }
+        let body = MoveReq(videoIds: videoIDs, sourceAlbumId: sourceAlbumID, targetAlbumId: targetAlbumID)
+        request.httpBody = try JSONEncoder().encode(body)
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        return (response as? HTTPURLResponse)?.statusCode == 200
+    }
+    
+    /// メディアの削除 (アルバムから外す)
+    static func deleteVideos(serverAddress: String, videoIDs: [String], albumID: String) async throws -> Bool {
+        guard let url = URL(string: "\(serverAddress)/deleteVideos") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        struct DelReq: Codable { let videoIds: [String]; let albumId: String }
+        let body = DelReq(videoIds: videoIDs, albumId: albumID)
+        request.httpBody = try JSONEncoder().encode(body)
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        return (response as? HTTPURLResponse)?.statusCode == 200
+    }
+    
+    /// メディアのアップロード (URLSessionUploadTaskを使用してメモリを節約)
+    static func uploadMedia(serverAddress: String, fileURL: URL, albumID: String) async throws -> Bool {
+        guard let url = URL(string: "\(serverAddress)/upload") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        
+        // ヘッダーに情報を付与
+        let filename = fileURL.lastPathComponent.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "upload"
+        request.setValue(filename, forHTTPHeaderField: "X-Filename")
+        request.setValue(albumID, forHTTPHeaderField: "X-Album-Id")
+        
+        // uploadタスクでファイルを送信
+        let (_, response) = try await URLSession.shared.upload(for: request, fromFile: fileURL)
+        return (response as? HTTPURLResponse)?.statusCode == 200
+    }
+}
+
 // MARK: - Bonjour / Server Discovery
 
 struct DiscoveredServer: Identifiable, Hashable {
@@ -70,7 +144,6 @@ struct RemoteAlbumInfo: Codable, Identifiable, Hashable {
     let id: String
     let name: String
     let videoCount: Int
-    // ★ ここが重要：サーバーからタイプを受け取る
     let type: String?
 }
 

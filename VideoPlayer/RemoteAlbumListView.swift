@@ -80,7 +80,8 @@ struct RemoteAlbumListView: View {
     
     // 行のデザインを統一
     private func albumRow(album: RemoteAlbumInfo, icon: String, color: Color) -> some View {
-        NavigationLink(destination: RemoteVideoListView(serverName: album.name, serverAddress: serverAddress, albumID: album.id)) {
+        // ★ 修正: allServerAlbums: albums を引数に追加しました
+        NavigationLink(destination: RemoteVideoListView(serverName: album.name, serverAddress: serverAddress, albumID: album.id, allServerAlbums: albums)) {
             HStack {
                 Image(systemName: icon)
                     .foregroundColor(color)

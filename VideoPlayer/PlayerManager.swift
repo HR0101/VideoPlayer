@@ -2,7 +2,7 @@ import AVKit
 import Combine
 
 // ===================================
-//  PlayerManager.swift
+//  PlayerManager.swift (シームレス画質変更対応版)
 // ===================================
 // 安定したビデオ再生を実現するための、プレイヤー管理クラスです。
 
@@ -37,6 +37,32 @@ final class PlayerManager: ObservableObject {
                 }
             } catch {
                 print("Error loading video asset: \(error)")
+            }
+        }
+    }
+    
+    // ★ 画質切り替え時、現在の再生位置を保ったままURLを変更する
+    func changeQuality(to newURL: URL) {
+        let currentTime = player.currentTime()
+        let wasPlaying = isPlaying
+        
+        Task {
+            do {
+                let asset = AVURLAsset(url: newURL)
+                let isPlayable = try await asset.load(.isPlayable)
+                if isPlayable {
+                    let playerItem = AVPlayerItem(asset: asset)
+                    self.player.replaceCurrentItem(with: playerItem)
+                    
+                    // 正確に元の時間へシークする
+                    await self.player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero)
+                    
+                    if wasPlaying {
+                        self.player.play()
+                    }
+                }
+            } catch {
+                print("Error changing quality: \(error)")
             }
         }
     }

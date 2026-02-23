@@ -417,6 +417,7 @@
 				INFOPLIST_FILE = VideoPlayer/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "サーバー検索のため";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "メディアを保存するために使用します";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Value: 動画をアルバムにインポートするために写真ライブラリへのアクセスを許可してください。 （またはご自身で設定したメッセージ）\n\nValue: 動画をアルバムにインポートするために写真ライブラリへのアクセスを許可してください。 （またはご自身で設定したメッセージ）\n\n動画のインポートするために写真へのアクセスを許可してください";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -456,6 +457,7 @@
 				INFOPLIST_FILE = VideoPlayer/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "サーバー検索のため";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "メディアを保存するために使用します";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Value: 動画をアルバムにインポートするために写真ライブラリへのアクセスを許可してください。 （またはご自身で設定したメッセージ）\n\nValue: 動画をアルバムにインポートするために写真ライブラリへのアクセスを許可してください。 （またはご自身で設定したメッセージ）\n\n動画のインポートするために写真へのアクセスを許可してください";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

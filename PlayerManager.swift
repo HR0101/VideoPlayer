@@ -1,19 +1,13 @@
-// ===================================
-//  PlayerManager.swift
-// ===================================
-// 安定したビデオ再生を実現するための、新しいプレイヤー管理クラスです。
-
 import AVKit
 import Combine
+
+
 
 @MainActor
 final class PlayerManager: ObservableObject {
     @Published var player = AVPlayer()
     @Published var isPlaying = false
-    @Published var currentTime: Double = 0
-    @Published var duration: Double = 0
     @Published var isReadyToPlay = false
-
     private var cancellables = Set<AnyCancellable>()
 
     init(videoURL: URL) {
@@ -24,11 +18,10 @@ final class PlayerManager: ObservableObject {
         Task {
             do {
                 let asset = AVURLAsset(url: url)
-                let (isPlayable, loadedDuration) = try await asset.load(.isPlayable, .duration)
+                let isPlayable = try await asset.load(.isPlayable)
 
                 if isPlayable {
                     let playerItem = AVPlayerItem(asset: asset)
-                    self.duration = loadedDuration.seconds
                     self.player.replaceCurrentItem(with: playerItem)
 
                     player.publisher(for: \.rate)
@@ -41,6 +34,48 @@ final class PlayerManager: ObservableObject {
                 }
             } catch {
                 print("Error loading video asset: \(error)")
+            }
+        }
+    }
+    
+    // 画質切り替え時、現在の再生位置を保ったままURLを変更する
+    func changeQuality(to newURL: URL) {
+        let currentTime = player.currentTime()
+        let wasPlaying = isPlaying
+        
+        Task {
+            do {
+                let asset = AVURLAsset(url: newURL)
+                let isPlayable = try await asset.load(.isPlayable)
+                if isPlayable {
+                    let playerItem = AVPlayerItem(asset: asset)
+                    self.player.replaceCurrentItem(with: playerItem)
+                    
+                    // 正確に元の時間へシークする
+                    await self.player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero)
+                    
+                    if wasPlaying {
+                        self.player.play()
+                    }
+                }
+            } catch {
+                print("Error changing quality: \(error)")
+            }
+        }
+    }
+
+    func changeVideo(to newURL: URL) {
+        Task {
+            do {
+                let asset = AVURLAsset(url: newURL)
+                let isPlayable = try await asset.load(.isPlayable)
+                if isPlayable {
+                    let playerItem = AVPlayerItem(asset: asset)
+                    self.player.replaceCurrentItem(with: playerItem)
+                    self.player.play() 
+                }
+            } catch {
+                print("Error changing video: \(error)")
             }
         }
     }

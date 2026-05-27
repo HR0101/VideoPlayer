@@ -4,3 +4,6 @@
 *.plist
 *.entitlements
 
+.DS_Store/
+
+Assets.xcassets

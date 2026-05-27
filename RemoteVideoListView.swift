@@ -8,11 +8,10 @@ import UniformTypeIdentifiers
 import AppKit
 #endif
 
-// ===================================
-//  RemoteVideoListView.swift (ピッカー名前衝突回避版)
-// ===================================
 
-// MARK: - 再生履歴管理クラス
+//  RemoteVideoListView.swift (ピッカー名前衝突回避版)
+
+
 class PlaybackHistoryManager {
     static let shared = PlaybackHistoryManager()
     private let historyKey = "playback_history_ids"

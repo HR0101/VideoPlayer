@@ -1,11 +1,19 @@
+//
+//  ThumbnailGenerator.swift
+//  VideoPlayer
+//
+//  Created by 原　颯登 on 2025/08/23.
+//
+
 import Foundation
 import AVFoundation
 import UIKit
 import CoreImage
 
+/// サムネイル生成を専門に扱うクラス
 class ThumbnailGenerator {
     
-
+    /// 指定された時間からサムネイルを生成します。真っ黒な場合は再試行します。
     static func generateThumbnail(for asset: AVAsset, at time: CMTime) async -> UIImage? {
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
@@ -31,7 +39,8 @@ class ThumbnailGenerator {
                 continue
             }
         }
-
+        
+        // すべての試行が失敗した場合、最初の時間で生成を試みる
         if let cgImage = try? await generator.image(at: time).image {
             return UIImage(cgImage: cgImage)
         }
@@ -39,6 +48,7 @@ class ThumbnailGenerator {
         return nil
     }
 
+    /// CGImageが主に黒または非常に暗い色で構成されているかを判定します。
     private static func isImagePredominantlyBlack(
         image: CGImage,
         darknessThreshold: UInt8 = 30,

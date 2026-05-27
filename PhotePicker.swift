@@ -1,7 +1,10 @@
 import SwiftUI
 import PhotosUI
 
-
+// ===================================
+//  PhotoPicker.swift
+// ===================================
+// 写真アプリを開き、ビデオを選択するためのUIViewControllerRepresentableです。
 struct PhotoPicker: UIViewControllerRepresentable {
     let albumName: String
     let videoManager: VideoManager

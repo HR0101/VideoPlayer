@@ -13,7 +13,7 @@ private struct VideoThumbnailPreferenceKey: PreferenceKey {
     }
 }
 
-
+// MARK: - Custom Views (Player and Alert)
 
 private struct PlayerView: View {
     let url: URL
@@ -32,7 +32,7 @@ private struct PlayerView: View {
             .offset(y: dragOffset.height)
             .opacity(1.0 - Double(abs(dragOffset.height) / 300))
         }
-        
+        // ★ 修正: ZStack全体でセーフエリアを無視する
         .edgesIgnoringSafeArea(.all)
         .simultaneousGesture(
             DragGesture()
@@ -85,7 +85,7 @@ private struct CustomTrashAlertView: View {
                     }
                     .foregroundColor(.red)
 
-                    
+                    // ★ 修正: DividerをHStack内で使用
                     Color.gray.opacity(0.5).frame(width: 1, height: 40)
 
                     Button {
@@ -137,7 +137,7 @@ struct VideoGridView: View {
     @State private var dragSelectionMode: DragSelectionState = .inactive
     @GestureState private var dragValue: DragGesture.Value? = nil
     
-    
+    // ★ 追加: カスタムカラー定義
     private let primaryDarkColor = Color(red: 0.1, green: 0.1, blue: 0.1)
     private let accentGlowColor = Color.cyan
 
@@ -172,6 +172,7 @@ struct VideoGridView: View {
 
     var body: some View {
         ZStack {
+            // ★ 追加: 背景色をAlbumListViewと統一
             primaryDarkColor.ignoresSafeArea()
             
             ZStack(alignment: .bottom) {
@@ -200,7 +201,7 @@ struct VideoGridView: View {
             .navigationTitle(isSelectionMode ? "\(selectedVideos.count)件を選択中" : albumName)
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchText, prompt: "ビデオを検索")
-            
+            // ★ 修正: ナビゲーションバーのカスタムをAlbumListViewと統一
             .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbarBackground(primaryDarkColor, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
@@ -247,6 +248,8 @@ struct VideoGridView: View {
         .animation(.default, value: isSelectionMode)
     }
 
+    // MARK: - Subviews
+    
     @ToolbarContentBuilder
     private func toolbarContent() -> some ToolbarContent {
         ToolbarItem(placement: .navigationBarLeading) {
@@ -299,6 +302,7 @@ struct VideoGridView: View {
         }
         .disabled(selectedVideos.isEmpty)
         .padding()
+        // ★ 修正: よりモダンなぼかし効果
         .background(.ultraThinMaterial)
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
@@ -316,7 +320,7 @@ struct VideoGridView: View {
         }
         .disabled(selectedVideos.isEmpty)
         .padding()
-    
+        // ★ 修正: よりモダンなぼかし効果
         .background(.ultraThinMaterial)
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
@@ -350,7 +354,7 @@ struct VideoGridView: View {
                     }
                 }
             
-
+            // ★ 追加: ネオ・モーフィズム風の影
             .shadow(color: Color.black.opacity(0.4), radius: 6, x: 3, y: 3)
             .shadow(color: Color.white.opacity(0.05), radius: 3, x: -1, y: -1)
 
@@ -361,7 +365,7 @@ struct VideoGridView: View {
             if isSelectionMode {
                 let isSelected = selectedVideos.contains(metadata.url)
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-
+                    // ★ 修正: 選択時を鮮やかな色に
                     .font(.title2.weight(.bold))
                     .foregroundColor(isSelected ? accentGlowColor : .white)
                     .padding(5)
@@ -372,10 +376,11 @@ struct VideoGridView: View {
                             }
                         }
                     )
+                    // ★ 修正: 右上に少し寄せる
                     .offset(x: -2, y: 2)
             }
         }
-      
+        // ★ 修正: 角を大きく丸める
         .cornerRadius(12)
         .clipped()
         .contentShape(Rectangle())
@@ -396,7 +401,7 @@ struct VideoGridView: View {
         )
     }
 
-
+    // MARK: - Logic
     
     private func handleDragChange(from oldValue: DragGesture.Value?, to newValue: DragGesture.Value?) {
         guard let value = newValue else {

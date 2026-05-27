@@ -1,6 +1,11 @@
 import Foundation
 import Network
 
+// ===================================
+//  ServerModels.swift
+// ===================================
+
+// MARK: - API通信マネージャー (NAS機能用)
 class ServerAPI {
     
     /// アルバム作成
@@ -41,7 +46,7 @@ class ServerAPI {
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
     
-    /// メディアの削除
+    /// メディアの削除 (アルバムから外す)
     static func deleteVideos(serverAddress: String, videoIDs: [String], albumID: String) async throws -> Bool {
         guard let url = URL(string: "\(serverAddress)/deleteVideos") else { return false }
         var request = URLRequest(url: url)
@@ -56,7 +61,7 @@ class ServerAPI {
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
     
-    /// メディアのアップロード
+    /// メディアのアップロード (URLSessionUploadTaskを使用してメモリを節約)
     static func uploadMedia(serverAddress: String, fileURL: URL, albumID: String) async throws -> Bool {
         guard let url = URL(string: "\(serverAddress)/upload") else { return false }
         var request = URLRequest(url: url)
@@ -74,7 +79,7 @@ class ServerAPI {
     }
 }
 
-
+// MARK: - Bonjour / Server Discovery
 
 struct DiscoveredServer: Identifiable, Hashable {
     let id = UUID()
@@ -133,7 +138,7 @@ class ServerBrowser: NSObject, ObservableObject, NetServiceBrowserDelegate, NetS
     }
 }
 
-
+// MARK: - Server Data Models
 
 struct RemoteAlbumInfo: Codable, Identifiable, Hashable {
     let id: String

@@ -1,7 +1,10 @@
 import SwiftUI
 import AVKit
 
-
+// ===================================
+//  LocalVideoThumbnailView.swift
+// ===================================
+// ローカルのビデオURLからサムネイルを生成して表示します。
 
 struct LocalVideoThumbnailView: View {
     let url: URL

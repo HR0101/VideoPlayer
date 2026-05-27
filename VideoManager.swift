@@ -1,7 +1,10 @@
 import Foundation
 import SwiftUI
 
-
+// ===================================
+//  VideoManager.swift
+// ===================================
+// アルバム、ごみ箱の管理を担当します。
 @MainActor
 class VideoManager: ObservableObject {
     @Published var albums: [String] = []
@@ -21,7 +24,7 @@ class VideoManager: ObservableObject {
         loadAlbums()
     }
 
-    
+    // MARK: - Album Management
     func loadAlbums() {
         do {
             let contents = try FileManager.default.contentsOfDirectory(at: rootDirectory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
@@ -54,7 +57,7 @@ class VideoManager: ObservableObject {
         }
     }
     
-    
+    // MARK: - Video Fetching
     func fetchVideos(for albumType: AlbumType) -> [URL] {
         var videoURLs: [URL] = []
         do {
@@ -80,7 +83,7 @@ class VideoManager: ObservableObject {
         }
     }
 
-    
+    // MARK: - Video Operations
     func importVideos(from urls: [URL], to albumName: String) async {
         let albumURL = rootDirectory.appendingPathComponent(albumName)
         createAlbum(name: albumName)
@@ -151,7 +154,7 @@ class VideoManager: ObservableObject {
         for item in trashItems { deletePermanently(url: item) }
     }
 
-    
+    // MARK: - Extended Attribute Helpers
     private func setExtendedAttribute(at url: URL, name: String, value: String) throws {
         guard let valueData = value.data(using: .utf8) else { return }
         let result = valueData.withUnsafeBytes {

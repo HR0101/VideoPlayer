@@ -1,5 +1,9 @@
 import SwiftUI
 
+// ===================================
+//  AlbumListView.swift (プレミアムUI & リスト・カバー表示切り替え対応版)
+// ===================================
+
 struct AlbumListView: View {
     @StateObject private var videoManager = VideoManager()
     @EnvironmentObject var serverBrowser: ServerBrowser
@@ -24,6 +28,7 @@ struct AlbumListView: View {
         (.trash, "ごみ箱", "trash.fill")
     ]
     
+    // ★ プレミアムカラー定義: 深みのあるミッドナイトブルーとシャンパンゴールド
     private let primaryDarkColor = Color(red: 0.05, green: 0.05, blue: 0.08)
     private let accentGlowColor = Color(red: 0.85, green: 0.73, blue: 0.45)
 
@@ -46,7 +51,7 @@ struct AlbumListView: View {
                 backgroundGradient
                 
                 ScrollView {
-                    VStack(spacing: 40) {
+                    VStack(spacing: 32) {
                         localSection
                         serverSection
                     }
@@ -61,6 +66,7 @@ struct AlbumListView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 16) {
+                        // ★ 表示切り替えボタン
                         Button(action: { withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { isListViewMode.toggle() } }) {
                             Image(systemName: isListViewMode ? "square.grid.2x2" : "list.bullet")
                                 .foregroundColor(accentGlowColor)
@@ -110,58 +116,38 @@ struct AlbumListView: View {
         }
     }
     
+    // MARK: - Local Section
     @ViewBuilder
     private var localSection: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            sectionHeader(title: "ローカルストレージ")
+        VStack(alignment: .leading, spacing: 16) {
+            sectionHeader(title: "ローカルライブラリ")
             
-            // ライブラリ
-            VStack(alignment: .leading, spacing: 12) {
-                sectionSubHeader(title: "ライブラリ")
-                
-                if isListViewMode {
-                    LazyVStack(spacing: 12) {
-                        ForEach(specialAlbums, id: \.type) { album in
-                            localListRow(type: album.type, name: album.name, icon: album.icon)
-                        }
+            if isListViewMode {
+                LazyVStack(spacing: 12) {
+                    ForEach(specialAlbums, id: \.type) { album in
+                        localListRow(type: album.type, name: album.name, icon: album.icon)
                     }
-                } else {
-                    LazyVGrid(columns: columns, spacing: 16) {
-                        ForEach(specialAlbums, id: \.type) { album in
-                            localGridCell(type: album.type, name: album.name, icon: album.icon)
-                        }
+                    ForEach(videoManager.albums, id: \.self) { albumName in
+                        localListRow(type: .user(albumName), name: albumName, icon: "folder.fill")
                     }
                 }
-            }
-            
-            // マイアルバム
-            if !videoManager.albums.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    sectionSubHeader(title: "マイアルバム")
-                    
-                    if isListViewMode {
-                        LazyVStack(spacing: 12) {
-                            ForEach(videoManager.albums, id: \.self) { albumName in
-                                localListRow(type: .user(albumName), name: albumName, icon: "folder.fill")
-                            }
-                        }
-                    } else {
-                        LazyVGrid(columns: columns, spacing: 16) {
-                            ForEach(videoManager.albums, id: \.self) { albumName in
-                                localGridCell(type: .user(albumName), name: albumName, icon: "folder.fill")
-                            }
-                        }
+            } else {
+                LazyVGrid(columns: columns, spacing: 16) {
+                    ForEach(specialAlbums, id: \.type) { album in
+                        localGridCell(type: album.type, name: album.name, icon: album.icon)
+                    }
+                    ForEach(videoManager.albums, id: \.self) { albumName in
+                        localGridCell(type: .user(albumName), name: albumName, icon: "folder.fill")
                     }
                 }
-                .padding(.top, 8)
             }
         }
     }
     
-    //
+    // MARK: - Server Section
     @ViewBuilder
     private var serverSection: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 16) {
             if let server = serverManager.server, let address = server.address {
                 sectionHeader(title: server.name)
                 
@@ -174,76 +160,32 @@ struct AlbumListView: View {
                     let videoAlbums = serverManager.albums.filter { ($0.type == "video" || $0.type == nil) && $0.name != "ALL VIDEOS" && $0.name != "ALL PHOTOS" }
                     let photoAlbums = serverManager.albums.filter { $0.type == "photo" && $0.name != "ALL VIDEOS" && $0.name != "ALL PHOTOS" }
                     
-                    let historyCount = UserDefaults.standard.stringArray(forKey: "playback_history_ids")?.count ?? 0
-                    let historyAlbum = RemoteAlbumInfo(id: "HISTORY", name: "最近再生した項目", videoCount: historyCount, type: "mixed")
-                    
-                    // サーバー：ライブラリ
-                    VStack(alignment: .leading, spacing: 12) {
-                        sectionSubHeader(title: "ライブラリ")
-                        
-                        if isListViewMode {
-                            LazyVStack(spacing: 12) {
-                                serverListRow(album: historyAlbum, address: address, icon: "clock.arrow.circlepath")
-                                
-                                ForEach(libraryAlbums) { album in
-                                    let isPhoto = album.name == "ALL PHOTOS"
-                                    serverListRow(album: album, address: address, icon: isPhoto ? "photo.on.rectangle.fill" : "film.stack.fill")
-                                }
+                    if isListViewMode {
+                        LazyVStack(spacing: 12) {
+                            ForEach(libraryAlbums) { album in
+                                let isPhoto = album.name == "ALL PHOTOS"
+                                serverListRow(album: album, address: address, icon: isPhoto ? "photo.on.rectangle.fill" : "film.stack.fill")
                             }
-                        } else {
-                            LazyVGrid(columns: columns, spacing: 16) {
-                                serverGridCell(album: historyAlbum, address: address, icon: "clock.arrow.circlepath")
-                                
-                                ForEach(libraryAlbums) { album in
-                                    let isPhoto = album.name == "ALL PHOTOS"
-                                    serverGridCell(album: album, address: address, icon: isPhoto ? "photo.on.rectangle.fill" : "film.stack.fill")
-                                }
+                            ForEach(videoAlbums) { album in
+                                serverListRow(album: album, address: address, icon: "folder.fill")
+                            }
+                            ForEach(photoAlbums) { album in
+                                serverListRow(album: album, address: address, icon: "photo.on.rectangle.fill")
                             }
                         }
-                    }
-                    
-                    // サーバー：動画アルバム
-                    if !videoAlbums.isEmpty {
-                        VStack(alignment: .leading, spacing: 12) {
-                            sectionSubHeader(title: "動画アルバム")
-                            
-                            if isListViewMode {
-                                LazyVStack(spacing: 12) {
-                                    ForEach(videoAlbums) { album in
-                                        serverListRow(album: album, address: address, icon: "folder.fill")
-                                    }
-                                }
-                            } else {
-                                LazyVGrid(columns: columns, spacing: 16) {
-                                    ForEach(videoAlbums) { album in
-                                        serverGridCell(album: album, address: address, icon: "folder.fill")
-                                    }
-                                }
+                    } else {
+                        LazyVGrid(columns: columns, spacing: 16) {
+                            ForEach(libraryAlbums) { album in
+                                let isPhoto = album.name == "ALL PHOTOS"
+                                serverGridCell(album: album, address: address, icon: isPhoto ? "photo.on.rectangle.fill" : "film.stack.fill")
+                            }
+                            ForEach(videoAlbums) { album in
+                                serverGridCell(album: album, address: address, icon: "folder.fill")
+                            }
+                            ForEach(photoAlbums) { album in
+                                serverGridCell(album: album, address: address, icon: "photo.on.rectangle.fill")
                             }
                         }
-                        .padding(.top, 8)
-                    }
-                    
-                    //  サーバー：写真アルバム
-                    if !photoAlbums.isEmpty {
-                        VStack(alignment: .leading, spacing: 12) {
-                            sectionSubHeader(title: "写真アルバム")
-                            
-                            if isListViewMode {
-                                LazyVStack(spacing: 12) {
-                                    ForEach(photoAlbums) { album in
-                                        serverListRow(album: album, address: address, icon: "photo.on.rectangle.fill")
-                                    }
-                                }
-                            } else {
-                                LazyVGrid(columns: columns, spacing: 16) {
-                                    ForEach(photoAlbums) { album in
-                                        serverGridCell(album: album, address: address, icon: "photo.on.rectangle.fill")
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.top, 8)
                     }
                 }
             } else {
@@ -262,30 +204,16 @@ struct AlbumListView: View {
         }
     }
     
-    //
     private func sectionHeader(title: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.title2.weight(.bold))
-                .foregroundColor(accentGlowColor)
-                .tracking(1.0)
-
-            Rectangle()
-                .fill(LinearGradient(colors: [accentGlowColor.opacity(0.6), .clear], startPoint: .leading, endPoint: .trailing))
-                .frame(height: 1)
-        }
-        .padding(.bottom, 4)
-    }
-    
-    private func sectionSubHeader(title: String) -> some View {
         Text(title)
-            .font(.subheadline.weight(.semibold))
-            .foregroundColor(.white.opacity(0.6))
+            .font(.title3.weight(.bold))
+            .foregroundColor(accentGlowColor)
             .tracking(1.0)
+            .padding(.bottom, 4)
             .padding(.leading, 4)
     }
     
-
+    // MARK: - ローカル用コンポーネント
     private func localListRow(type: AlbumType, name: String, icon: String) -> some View {
         NavigationLink(destination: VideoGridView(albumType: type, albumName: name, videoManager: videoManager)) {
             HStack(spacing: 16) {
@@ -345,7 +273,8 @@ struct AlbumListView: View {
             }
         }
     }
-
+    
+    // MARK: - サーバー用コンポーネント
     private func serverListRow(album: RemoteAlbumInfo, address: String, icon: String) -> some View {
         NavigationLink(destination: RemoteVideoListView(serverName: album.name, serverAddress: address, albumID: album.id, allServerAlbums: serverManager.albums)) {
             HStack(spacing: 16) {
@@ -358,16 +287,9 @@ struct AlbumListView: View {
                     Text(album.name)
                         .font(.subheadline.weight(.bold))
                         .foregroundColor(.white)
-                    
-                    if album.id != "HISTORY" {
-                        Text("\(album.videoCount) 項目")
-                            .font(.caption.weight(.medium))
-                            .foregroundColor(accentGlowColor.opacity(0.8))
-                    } else {
-                        Text("最近再生したメディア")
-                            .font(.caption.weight(.medium))
-                            .foregroundColor(Color.gray)
-                    }
+                    Text("\(album.videoCount) 項目")
+                        .font(.caption.weight(.medium))
+                        .foregroundColor(accentGlowColor.opacity(0.8))
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
@@ -381,7 +303,7 @@ struct AlbumListView: View {
             .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
         }
         .contextMenu {
-            if album.name != "ALL VIDEOS" && album.name != "ALL PHOTOS" && album.id != "HISTORY" {
+            if album.name != "ALL VIDEOS" && album.name != "ALL PHOTOS" {
                 Button(role: .destructive) {
                     deleteServerAlbum(album: album, address: address)
                 } label: { Label("削除", systemImage: "trash") }
@@ -404,24 +326,20 @@ struct AlbumListView: View {
                         .font(.subheadline.weight(.bold))
                         .foregroundColor(.white)
                         .lineLimit(1)
-                    
                     Spacer()
-                    
-                    if album.id != "HISTORY" {
-                        Text("\(album.videoCount)")
-                            .font(.caption2.weight(.bold))
-                            .foregroundColor(primaryDarkColor)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(accentGlowColor)
-                            .cornerRadius(6)
-                    }
+                    Text("\(album.videoCount)")
+                        .font(.caption2.weight(.bold))
+                        .foregroundColor(primaryDarkColor)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(accentGlowColor)
+                        .cornerRadius(6)
                 }
                 .padding(.horizontal, 4)
             }
         }
         .contextMenu {
-            if album.name != "ALL VIDEOS" && album.name != "ALL PHOTOS" && album.id != "HISTORY" {
+            if album.name != "ALL VIDEOS" && album.name != "ALL PHOTOS" {
                 Button(role: .destructive) {
                     deleteServerAlbum(album: album, address: address)
                 } label: { Label("削除", systemImage: "trash") }
@@ -429,7 +347,7 @@ struct AlbumListView: View {
         }
     }
 
-
+    // MARK: - Actions
     private func createAlbum() {
         if !newAlbumName.isEmpty {
             videoManager.createAlbum(name: newAlbumName)
@@ -454,7 +372,7 @@ struct AlbumListView: View {
     }
 }
 
-// カバー表示用コンポーネント
+// MARK: - カバー表示用コンポーネント
 
 struct LocalAlbumCoverView: View {
     let albumType: AlbumType
@@ -486,8 +404,7 @@ struct LocalAlbumCoverView: View {
                 hasFetched = true
                 Task {
                     let urls = await MainActor.run { videoManager.fetchVideos(for: albumType) }
-                    // アルバムのカバーをランダムに選択
-                    coverURL = urls.randomElement()
+                    coverURL = urls.first
                 }
             }
         }
@@ -540,27 +457,15 @@ struct ServerAlbumCoverView: View {
     }
     
     private func fetchCoverID() async {
-        // ★ 履歴アルバムの場合は、直近に見たメディア最新をカバーにする
-        if albumID == "HISTORY" {
-            let historyIDs = UserDefaults.standard.stringArray(forKey: "playback_history_ids") ?? []
-            if let firstID = historyIDs.first {
-                await MainActor.run {
-                    coverVideoID = firstID
-                }
-            }
-            return
-        }
-        
         guard let url = URL(string: "\(serverAddress)/albums/\(albumID)/videos") else { return }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let videos = try decoder.decode([RemoteVideoInfo].self, from: data)
-            //  通常のアルバムはカバーをランダムに選択
-            if let randomVideo = videos.randomElement() {
+            if let first = videos.first {
                 await MainActor.run {
-                    coverVideoID = randomVideo.id
+                    coverVideoID = first.id
                 }
             }
         } catch {

@@ -1,6 +1,8 @@
 import SwiftUI
 
-
+// ===================================
+//  RemoteAlbumListView.swift (完全振り分け版)
+// ===================================
 
 struct RemoteAlbumListView: View {
     let serverName: String
@@ -28,15 +30,18 @@ struct RemoteAlbumListView: View {
                 .foregroundColor(.white)
             } else {
                 List {
-                    
+                    // 1. ライブラリ (ALL VIDEOS)
+                    // 名前が "ALL VIDEOS" または タイプが "mixed" のものを抽出
                     if let mixed = albums.first(where: { $0.name == "ALL VIDEOS" || $0.type == "mixed" }) {
                         Section("ライブラリ") {
                             albumRow(album: mixed, icon: "square.stack.fill", color: .yellow)
                         }
                     }
                     
+                    // ユーザー作成のアルバムだけを抽出（ALL VIDEOSを除く）
                     let userAlbums = albums.filter { $0.name != "ALL VIDEOS" && $0.type != "mixed" }
-
+                    
+                    // 2. 画像アルバム (type == "photo")
                     let photoAlbums = userAlbums.filter { $0.type == "photo" }
                     if !photoAlbums.isEmpty {
                         Section("画像アルバム") {
@@ -46,7 +51,8 @@ struct RemoteAlbumListView: View {
                         }
                     }
                     
-
+                    // 3. 動画アルバム (type == "video" または typeが無いもの)
+                    // ※既存の古いアルバムは type が nil の可能性があるため、ここで拾います
                     let videoAlbums = userAlbums.filter { $0.type == "video" || $0.type == nil }
                     if !videoAlbums.isEmpty {
                         Section("動画アルバム") {
@@ -107,6 +113,7 @@ struct RemoteAlbumListView: View {
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             self.albums = try JSONDecoder().decode([RemoteAlbumInfo].self, from: data)
+            // デバッグ用: 受信したデータの中身を確認
             for album in self.albums {
                 print("📦 Album: \(album.name), Type: \(album.type ?? "nil")")
             }

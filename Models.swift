@@ -1,8 +1,12 @@
 import Foundation
 import SwiftUI
 
+// ===================================
+//  Models.swift
+// ===================================
+// アプリケーション全体で使用されるデータモデルをこのファイルに集約します。
 
-// アプリケーション全体で使用されるデータモデルをこのファイルに集約
+// MARK: - Enums
 
 enum AlbumType: Hashable, Identifiable {
     case all
@@ -41,7 +45,7 @@ enum ThumbnailOption: Int, CaseIterable, Identifiable {
     }
 }
 
-
+// MARK: - Structs
 
 struct VideoMetadata: Identifiable, Equatable {
     var id: URL { url }

@@ -1,14 +1,10 @@
 import Foundation
 import SwiftUI
 
-// ===================================
-//  VideoManager.swift
-// ===================================
-// アルバム、ごみ箱の管理を担当します。
 @MainActor
 class VideoManager: ObservableObject {
     @Published var albums: [String] = []
-    
+
     private let rootDirectory: URL
     private let trashDirectory: URL
     private let originalAlbumAttributeKey = "jp.co.yourapp.originalAlbum"
@@ -17,10 +13,10 @@ class VideoManager: ObservableObject {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         rootDirectory = documentsPath.appendingPathComponent("VideoAlbums")
         trashDirectory = rootDirectory.appendingPathComponent("ごみ箱")
-        
+
         try? FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true, attributes: nil)
         try? FileManager.default.createDirectory(at: trashDirectory, withIntermediateDirectories: true, attributes: nil)
-        
+
         loadAlbums()
     }
 
@@ -56,7 +52,7 @@ class VideoManager: ObservableObject {
             print("Error deleting album: \(error)")
         }
     }
-    
+
     // MARK: - Video Fetching
     func fetchVideos(for albumType: AlbumType) async -> [URL] {
         let rootDir   = rootDirectory
@@ -92,16 +88,16 @@ class VideoManager: ObservableObject {
     func importVideos(from urls: [URL], to albumName: String) async {
         let albumURL = rootDirectory.appendingPathComponent(albumName)
         createAlbum(name: albumName)
-        
+
         for url in urls {
             let shouldStopAccessing = url.startAccessingSecurityScopedResource()
             defer { if shouldStopAccessing { url.stopAccessingSecurityScopedResource() } }
-            
+
             do {
                 let originalFileName = url.lastPathComponent
                 var destinationURL = albumURL.appendingPathComponent(originalFileName)
                 var counter = 2
-                
+
                 while FileManager.default.fileExists(atPath: destinationURL.path) {
                     let fileNameWithoutExtension = url.deletingPathExtension().lastPathComponent
                     let fileExtension = url.pathExtension
@@ -109,9 +105,9 @@ class VideoManager: ObservableObject {
                     destinationURL = albumURL.appendingPathComponent(newFileName)
                     counter += 1
                 }
-                
+
                 try FileManager.default.copyItem(at: url, to: destinationURL)
-                
+
             } catch {
                 print("Error importing video: \(error.localizedDescription)")
             }
@@ -124,7 +120,7 @@ class VideoManager: ObservableObject {
             if originalAlbum != "ごみ箱" {
                 try setExtendedAttribute(at: url, name: originalAlbumAttributeKey, value: originalAlbum)
             }
-            
+
             let destinationURL = trashDirectory.appendingPathComponent(url.lastPathComponent)
             try FileManager.default.moveItem(at: url, to: destinationURL)
         } catch {
@@ -137,9 +133,9 @@ class VideoManager: ObservableObject {
             let originalAlbum = try getExtendedAttribute(at: url, name: originalAlbumAttributeKey)
             let destinationAlbumName = originalAlbum ?? "マイアルバム"
             createAlbum(name: destinationAlbumName)
-            
+
             let destinationURL = rootDirectory.appendingPathComponent(destinationAlbumName).appendingPathComponent(url.lastPathComponent)
-            
+
             try FileManager.default.moveItem(at: url, to: destinationURL)
         } catch {
             print("Error restoring video: \(error)")

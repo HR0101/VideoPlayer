@@ -1,11 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-// ===================================
-//  DocumentPicker.swift
-// ===================================
-// ファイルアプリを開くためのUIViewControllerRepresentableです。
-
 struct DocumentPicker: UIViewControllerRepresentable {
     let albumName: String
     let videoManager: VideoManager
@@ -37,7 +32,7 @@ struct DocumentPicker: UIViewControllerRepresentable {
                 parent.onDismiss()
             }
         }
-        
+
         func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
              parent.onDismiss()
         }

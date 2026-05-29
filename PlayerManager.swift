@@ -1,22 +1,15 @@
 import AVKit
 import Combine
 
-// ===================================
-//  PlayerManager.swift (シームレス画質変更 + 連続再生/シークバー対応版)
-// ===================================
-// 安定したビデオ再生を実現するための、プレイヤー管理クラスです。
-
 @MainActor
 final class PlayerManager: ObservableObject {
     @Published var player = AVPlayer()
     @Published var isPlaying = false
     @Published var isReadyToPlay = false
 
-    // ★ シークバー用の再生位置・長さ (秒)
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
 
-    // ★ 動画が最後まで再生されたときに呼ばれる
     var onEnded: (() -> Void)?
 
     private var cancellables = Set<AnyCancellable>()
@@ -73,7 +66,6 @@ final class PlayerManager: ObservableObject {
         }
     }
 
-    // ★ 画質切り替え時、現在の再生位置を保ったままURLを変更する
     func changeQuality(to newURL: URL) {
         let currentTime = player.currentTime()
         let wasPlaying = isPlaying
@@ -86,7 +78,6 @@ final class PlayerManager: ObservableObject {
                     let playerItem = AVPlayerItem(asset: asset)
                     self.player.replaceCurrentItem(with: playerItem)
 
-                    // 正確に元の時間へシークする
                     await self.player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero)
 
                     if wasPlaying {
@@ -99,7 +90,6 @@ final class PlayerManager: ObservableObject {
         }
     }
 
-    // ★ 別の動画へ完全に切り替える (startAt 秒から再生 / 既定は先頭)
     func changeVideo(to newURL: URL, startAt: Double = 0) {
         isReadyToPlay = false
         currentTime = 0
@@ -122,13 +112,11 @@ final class PlayerManager: ObservableObject {
         }
     }
 
-    // ★ シークバーから指定秒へ移動
     func seek(toSeconds seconds: Double) {
         let target = CMTime(seconds: seconds, preferredTimescale: 600)
         player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
-    // ★ 先頭へ戻して再生 (リピート1曲用)
     func restart() {
         player.seek(to: .zero)
         player.play()

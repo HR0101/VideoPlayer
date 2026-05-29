@@ -1,11 +1,6 @@
 import Foundation
 import SwiftUI
 
-// ===================================
-//  Models.swift
-// ===================================
-// アプリケーション全体で使用されるデータモデルをこのファイルに集約します。
-
 // MARK: - Enums
 
 enum AlbumType: Hashable, Identifiable, Sendable {

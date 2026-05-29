@@ -1,15 +1,10 @@
 import Foundation
 import Network
 
-// ===================================
-//  ServerModels.swift
-// ===================================
-
-// MARK: - 認証ヘルパー (サーバーごとのPINを保持)
+// MARK: - 認証ヘルパー
 enum ServerAuth {
     private static let prefix = "serverPIN_"
 
-    /// アドレスからホスト単位の安定キーを生成 (ポートやパスの違いを無視)
     static func key(for address: String) -> String {
         if let url = URL(string: address), let host = url.host { return prefix + host }
         return prefix + address
@@ -36,7 +31,7 @@ enum ServerAuth {
         return req
     }
 
-    /// メディアURL用 (AsyncImage / AVPlayer はヘッダを付けられないため pin をクエリに付与)
+    /// AsyncImage / AVPlayer はヘッダを付けられないため pin をクエリパラメータに付与
     static func mediaURL(address: String, path: String, query: [URLQueryItem] = []) -> URL? {
         guard var comps = URLComponents(string: address + path) else { return nil }
         var items = query
@@ -75,7 +70,7 @@ class PlaybackHistoryManager {
     func getLastPlayedID() -> String? { getHistoryIDs().first }
 }
 
-// MARK: - お気に入り管理 (クライアント側・メディアIDで保持)
+// MARK: - お気に入り管理
 @MainActor
 final class FavoritesManager: ObservableObject {
     static let shared = FavoritesManager()
@@ -103,10 +98,9 @@ final class FavoritesManager: ObservableObject {
     }
 }
 
-// MARK: - API通信マネージャー (NAS機能用)
+// MARK: - API通信マネージャー
 class ServerAPI {
-    
-    /// アルバム作成
+
     static func createAlbum(serverAddress: String, name: String, type: String) async throws -> Bool {
         guard let url = URL(string: "\(serverAddress)/albums/create") else { return false }
         var request = URLRequest(url: url)
@@ -115,12 +109,11 @@ class ServerAPI {
         if let pin = ServerAuth.pin(for: serverAddress) { request.setValue(pin, forHTTPHeaderField: "X-Auth-PIN") }
         let body = ["name": name, "type": type]
         request.httpBody = try JSONEncoder().encode(body)
-        
+
         let (_, response) = try await URLSession.shared.data(for: request)
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
-    
-    /// アルバム削除
+
     static func deleteAlbum(serverAddress: String, albumID: String) async throws -> Bool {
         guard let url = URL(string: "\(serverAddress)/albums/\(albumID)") else { return false }
         var request = URLRequest(url: url)
@@ -130,8 +123,7 @@ class ServerAPI {
         let (_, response) = try await URLSession.shared.data(for: request)
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
-    
-    /// メディアの移動
+
     static func moveVideos(serverAddress: String, videoIDs: [String], sourceAlbumID: String, targetAlbumID: String) async throws -> Bool {
         guard let url = URL(string: "\(serverAddress)/move") else { return false }
         var request = URLRequest(url: url)
@@ -142,12 +134,11 @@ class ServerAPI {
         struct MoveReq: Codable { let videoIds: [String]; let sourceAlbumId: String; let targetAlbumId: String }
         let body = MoveReq(videoIds: videoIDs, sourceAlbumId: sourceAlbumID, targetAlbumId: targetAlbumID)
         request.httpBody = try JSONEncoder().encode(body)
-        
+
         let (_, response) = try await URLSession.shared.data(for: request)
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
-    
-    /// メディアの削除 (アルバムから外す)
+
     static func deleteVideos(serverAddress: String, videoIDs: [String], albumID: String) async throws -> Bool {
         guard let url = URL(string: "\(serverAddress)/deleteVideos") else { return false }
         var request = URLRequest(url: url)
@@ -158,25 +149,23 @@ class ServerAPI {
         struct DelReq: Codable { let videoIds: [String]; let albumId: String }
         let body = DelReq(videoIds: videoIDs, albumId: albumID)
         request.httpBody = try JSONEncoder().encode(body)
-        
+
         let (_, response) = try await URLSession.shared.data(for: request)
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
-    
-    /// メディアのアップロード (URLSessionUploadTaskを使用してメモリを節約)
+
+    // URLSessionUploadTaskを使用してメモリを節約
     static func uploadMedia(serverAddress: String, fileURL: URL, albumID: String) async throws -> Bool {
         guard let url = URL(string: "\(serverAddress)/upload") else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        
-        // ヘッダーに情報を付与
+
         let filename = fileURL.lastPathComponent.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "upload"
         request.setValue(filename, forHTTPHeaderField: "X-Filename")
         request.setValue(albumID, forHTTPHeaderField: "X-Album-Id")
         if let pin = ServerAuth.pin(for: serverAddress) { request.setValue(pin, forHTTPHeaderField: "X-Auth-PIN") }
-        
-        // uploadタスクでファイルを送信
+
         let (_, response) = try await URLSession.shared.upload(for: request, fromFile: fileURL)
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
@@ -195,21 +184,21 @@ struct DiscoveredServer: Identifiable, Hashable {
 class ServerBrowser: NSObject, ObservableObject, NetServiceBrowserDelegate, NetServiceDelegate {
     @Published var discoveredServers: [DiscoveredServer] = []
     private let browser = NetServiceBrowser()
-    
+
     override init() {
         super.init()
         browser.delegate = self
     }
-    
+
     func startBrowsing() {
         discoveredServers.removeAll()
         browser.searchForServices(ofType: "_myvideoserver._tcp.", inDomain: "local.")
     }
-    
+
     func stopBrowsing() {
         browser.stop()
     }
-    
+
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
         let newServer = DiscoveredServer(name: service.name, service: service)
         if !discoveredServers.contains(where: { $0.name == newServer.name }) {
@@ -218,18 +207,18 @@ class ServerBrowser: NSObject, ObservableObject, NetServiceBrowserDelegate, NetS
             service.resolve(withTimeout: 5.0)
         }
     }
-    
+
     func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
         discoveredServers.removeAll { $0.service == service }
     }
-    
+
     func netServiceDidResolveAddress(_ sender: NetService) {
         guard let host = sender.hostName,
               let index = discoveredServers.firstIndex(where: { $0.service == sender }) else { return }
-        
+
         let port = sender.port
         let addressString = "http://\(host):\(port)"
-        
+
         DispatchQueue.main.async {
             guard self.discoveredServers.indices.contains(index) else { return }
             self.discoveredServers[index].address = addressString
@@ -257,7 +246,7 @@ struct RemoteVideoInfo: Codable, Identifiable, Hashable {
     let importDate: Date
     let creationDate: Date?
     let mediaType: String?
-    
+
     var isPhoto: Bool {
         return mediaType == "photo"
     }
@@ -288,7 +277,6 @@ class ServerManager: ObservableObject {
         }
     }
 
-    /// ユーザーが入力したPINを保存し、再取得を試みる
     func submitPIN(_ pin: String) {
         guard let address = currentAddress else { return }
         ServerAuth.setPIN(pin, for: address)

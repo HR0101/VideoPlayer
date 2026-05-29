@@ -1,11 +1,6 @@
 import SwiftUI
 import AVKit
 
-// ===================================
-//  LocalVideoThumbnailView.swift
-// ===================================
-// ローカルのビデオURLからサムネイルを生成して表示します。
-
 struct LocalVideoThumbnailView: View {
     let url: URL
     @EnvironmentObject var appSettings: AppSettings
@@ -25,7 +20,7 @@ struct LocalVideoThumbnailView: View {
                         .overlay(ProgressView())
                 }
             }
-            
+
             if let duration = duration {
                 Text(duration)
                     .font(.caption.weight(.semibold))
@@ -49,7 +44,7 @@ struct LocalVideoThumbnailView: View {
         Task {
             let loadedDuration = try? await asset.load(.duration)
             let formattedDuration = formatDuration(loadedDuration)
-            
+
             var time: CMTime
             switch appSettings.thumbnailOption {
             case .initial:
@@ -66,9 +61,9 @@ struct LocalVideoThumbnailView: View {
                 let randomSecond = Double.random(in: 0...max(0, durationSeconds - 1))
                 time = CMTime(seconds: randomSecond, preferredTimescale: 60)
             }
-            
+
             let generatedThumbnail = await ThumbnailGenerator.generateThumbnail(for: asset, at: time)
-            
+
             await MainActor.run {
                 self.thumbnail = generatedThumbnail
                 self.duration = formattedDuration

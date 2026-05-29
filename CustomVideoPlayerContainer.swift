@@ -1,10 +1,6 @@
 import SwiftUI
 import AVKit
 
-// ===================================
-//  CustomVideoPlayerContainer.swift
-// ===================================
-// PlayerManagerを使い、再生準備が整うまでインジケーターを表示します。
 struct CustomVideoPlayerContainer: View {
     let videoURL: URL
     @StateObject private var playerManager: PlayerManager

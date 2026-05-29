@@ -1,9 +1,5 @@
 import SwiftUI
 
-// ===================================
-//  AlbumListView.swift (プレミアムUI & リスト・カバー表示切り替え対応版)
-// ===================================
-
 struct AlbumListView: View {
     @StateObject private var videoManager = VideoManager()
     @EnvironmentObject var serverBrowser: ServerBrowser
@@ -21,14 +17,11 @@ struct AlbumListView: View {
     @State private var newServerAlbumType = "video"
     @State private var isUploadingAction = false
 
-    // ★ サーバーPIN入力
     @State private var isShowingPINPrompt = false
     @State private var pinInput = ""
 
-    // ★ サーバー停止
     @State private var showShutdownConfirm = false
-    
-    // ★ リストとグリッドの表示切り替えフラグ
+
     @AppStorage("isListViewMode") private var isListViewMode = false
     
     private let specialAlbums: [(type: AlbumType, name: String, icon: String)] = [
@@ -73,7 +66,6 @@ struct AlbumListView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 16) {
-                        // ★ 表示切り替えボタン
                         Button(action: { withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { isListViewMode.toggle() } }) {
                             Image(systemName: isListViewMode ? "square.grid.2x2" : "list.bullet")
                                 .foregroundColor(accentGlowColor)
@@ -276,7 +268,6 @@ struct AlbumListView: View {
             .padding(.leading, 4)
     }
 
-    // ★ サーバー名 + 停止ボタンを表示するヘッダー
     private func serverSectionHeader(title: String) -> some View {
         HStack {
             Text(title)
@@ -522,7 +513,6 @@ struct AlbumListView: View {
         }
     }
 
-    // ★ サーバーを停止する (PIN認証対応)
     private func shutdownServer(serverAddress: String) {
         guard let url = URL(string: "\(serverAddress)/server/shutdown") else { return }
         let req = ServerAuth.request(url, address: serverAddress, method: "POST")

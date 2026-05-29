@@ -9,9 +9,6 @@ import AppKit
 #endif
 
 
-//  RemoteVideoListView.swift (ピッカー名前衝突回避版)
-
-
 // MARK: - メインビュー
 struct RemoteVideoListView: View {
     let serverName: String
@@ -38,7 +35,6 @@ struct RemoteVideoListView: View {
     @State private var selectedVideoIDs = Set<String>()
     @State private var showMoveTargetSheet = false
     
-    // ★ アップロード関連の状態変数
     @State private var showUploadSourceMenu = false
     @State private var showPhotoPicker = false
     @State private var showDocumentPicker = false
@@ -215,10 +211,8 @@ struct RemoteVideoListView: View {
             }
         }
         .sheet(isPresented: $showMoveTargetSheet) { moveTargetSheet }
-        // ★ 各種ピッカーの呼び出しを ServerPhotoPicker, ServerDocumentPicker に変更
         .sheet(isPresented: $showPhotoPicker) { ServerPhotoPicker { items in handlePickedMedia(items: items) } }
         .sheet(isPresented: $showDocumentPicker) { ServerDocumentPicker { items in handlePickedMedia(items: items) } }
-        // ★ 削除確認のアラート
         .alert("アップロード完了", isPresented: $showDeletePrompt) {
             Button("元のファイルを削除", role: .destructive) { deletePendingItems() }
             Button("残す", role: .cancel) { cleanUpTempFiles() }
@@ -481,7 +475,6 @@ struct RemoteVideoListView: View {
     // MARK: - API Calls
     private var isVirtualAlbum: Bool { albumID == "HISTORY" || albumID == "FAVORITES" }
 
-    /// すべての動画と写真を取得 (HISTORY / FAVORITES 用)
     private func fetchAllMedia() async throws -> [RemoteVideoInfo] {
         let libraryAlbums = allServerAlbums.filter { $0.name == "ALL VIDEOS" || $0.name == "ALL PHOTOS" }
         let decoder = JSONDecoder()
@@ -555,7 +548,6 @@ struct RemoteVideoListView: View {
     
     private func deleteSingleVideo(id: String) { Task { _ = try? await ServerAPI.deleteVideos(serverAddress: serverAddress, videoIDs: [id], albumID: albumID); await fetchVideosFromServer() } }
     
-    // ★ アップロード処理の刷新
     private func handlePickedMedia(items: [PickedMediaItem]) {
         isUploading = true
         Task {
@@ -566,11 +558,10 @@ struct RemoteVideoListView: View {
             await fetchVideosFromServer()
             
             itemsPendingDeletion = items
-            showDeletePrompt = true // アップロード完了後に削除プロンプトを表示
+            showDeletePrompt = true
         }
     }
     
-    // ★ 削除アクション
     private func deletePendingItems() {
         Task {
             for item in itemsPendingDeletion {
@@ -608,14 +599,12 @@ struct RemoteVideoListView: View {
 
 // MARK: - ピッカー・ビュー部品群
 
-// ★ 選択されたメディアと削除アクションを保持する構造体
 struct PickedMediaItem {
     let tempURL: URL
     let originalFilename: String
     let deleteAction: () async throws -> Void
 }
 
-// ★ 写真アプリ用ピッカー (名前を ServerPhotoPicker に変更)
 struct ServerPhotoPicker: UIViewControllerRepresentable {
     let onMediaPicked: ([PickedMediaItem]) -> Void
     
@@ -696,7 +685,6 @@ struct ServerPhotoPicker: UIViewControllerRepresentable {
     }
 }
 
-// ★ ファイルアプリ用ピッカー (名前を ServerDocumentPicker に変更)
 struct ServerDocumentPicker: UIViewControllerRepresentable {
     let onMediaPicked: ([PickedMediaItem]) -> Void
     
@@ -780,7 +768,6 @@ private struct RemoteVideoThumbnailView: View {
     private func formatDuration(_ totalSeconds: TimeInterval) -> String { let secondsInt = Int(totalSeconds); return String(format: "%d:%02d", secondsInt / 60, secondsInt % 60) }
 }
 
-// ★ 画質切り替え＆前後スワイプ＆キーボードショートカット対応プレイヤー
 private enum RepeatMode { case off, all, one }
 
 private struct DraggablePlayerView: View {
@@ -796,7 +783,6 @@ private struct DraggablePlayerView: View {
     @State private var dragOffset: CGSize = .zero
     @State private var selectedQuality: String = "original"
 
-    // ★ 低画質(1080p)オンデマンド変換の状態
     @State private var isPreparingQuality: Bool = false
     @State private var prepareProgress: Double = 0
     @State private var prepareTask: Task<Void, Never>? = nil
@@ -804,7 +790,6 @@ private struct DraggablePlayerView: View {
     @State private var showControls: Bool = true
     @State private var hideControlsTask: Task<Void, Never>? = nil
 
-    // ★ 連続再生・シャッフル・リピート・スライドショー
     @State private var isContinuous: Bool = true
     @State private var isShuffle: Bool = false
     @State private var repeatMode: RepeatMode = .off
@@ -908,7 +893,6 @@ private struct DraggablePlayerView: View {
                 .transition(.opacity)
             }
 
-            // ★ 1080p変換中のオーバーレイ
             if isPreparingQuality {
                 ZStack {
                     Color.black.opacity(0.55).edgesIgnoringSafeArea(.all)
@@ -987,7 +971,6 @@ private struct DraggablePlayerView: View {
             playerManager.onEnded = { handlePlaybackEnded() }
         }
         .onReceive(playerManager.$isReadyToPlay) { ready in
-            // 各動画の再生開始時にスライドショー送りタイマーを仕掛ける
             if ready && isSlideshow { scheduleSlideshowAdvance() }
         }
         .onDisappear {
@@ -1009,7 +992,6 @@ private struct DraggablePlayerView: View {
         }
     }
 
-    // ショートカット操作用関数
     private func togglePlayPause() {
         if playerManager.isPlaying {
             playerManager.player.pause()
@@ -1057,7 +1039,6 @@ private struct DraggablePlayerView: View {
         selectedQuality = q
         let currentVideo = videos[currentIndex]
 
-        // オリジナルは即切り替え
         if q == "original" {
             prepareTask?.cancel()
             isPreparingQuality = false
@@ -1068,14 +1049,12 @@ private struct DraggablePlayerView: View {
             return
         }
 
-        // 1080p等はサーバーでオンデマンド変換 → 完成後に切り替え
         prepareTask?.cancel()
         prepareProgress = 0
         withAnimation { isPreparingQuality = true }
         prepareTask = Task { await prepareAndSwitch(video: currentVideo, quality: q) }
     }
 
-    /// サーバーにプロキシ生成を要求し、完成するまでポーリングしてから画質を切り替える
     @MainActor
     private func prepareAndSwitch(video: RemoteVideoInfo, quality: String) async {
         guard let prepareURL = ServerAuth.mediaURL(
@@ -1089,7 +1068,6 @@ private struct DraggablePlayerView: View {
         let req = ServerAuth.request(prepareURL, address: serverAddress)
         struct PrepareResp: Codable { let state: String; let progress: Double }
 
-        // 最大10分ポーリング
         for _ in 0..<600 {
             if Task.isCancelled { return }
             do {
@@ -1108,18 +1086,16 @@ private struct DraggablePlayerView: View {
                     }
                 }
             } catch {
-                withAnimation { isPreparingQuality = false } // 通信失敗 → オリジナルのまま
+                withAnimation { isPreparingQuality = false }
                 selectedQuality = "original"
                 return
             }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
-        // タイムアウト
         withAnimation { isPreparingQuality = false }
         selectedQuality = "original"
     }
 
-    /// 視聴を閉じたときにサーバー上のオンデマンドプロキシを削除する
     private func cleanupProxies() {
         let video = videos[currentIndex]
         guard let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(video.id)/proxy") else { return }
@@ -1127,13 +1103,10 @@ private struct DraggablePlayerView: View {
         Task { _ = try? await URLSession.shared.data(for: req) }
     }
     
-    // 手動スワイプ・キーボード用 (相対移動)
     private func changeVideo(offset: Int) {
         advance(forward: offset > 0, auto: false)
     }
 
-    /// 連続再生・シャッフル・リピートを考慮して次/前のインデックスへ移動する。
-    /// auto=true は自動送り (再生終了・スライドショー) からの呼び出し。
     private func advance(forward: Bool, auto: Bool) {
         slideshowTask?.cancel()
         if auto && repeatMode == .one {
@@ -1141,7 +1114,6 @@ private struct DraggablePlayerView: View {
             return
         }
         guard let newIndex = targetIndex(forward: forward, auto: auto) else {
-            // これ以上送り先がない (リピートoff・末尾) → 再生終了
             playerManager.player.pause()
             return
         }
@@ -1172,7 +1144,7 @@ private struct DraggablePlayerView: View {
         let generator = UIImpactFeedbackGenerator(style: .medium)
         generator.impactOccurred()
 
-        // 動画を切り替えたら画質はオリジナルへ戻す (自動送りで変換待ちが発生しないように)
+        // 自動送り時に変換待ちが発生しないよう、動画切り替えで画質をオリジナルへ戻す
         prepareTask?.cancel()
         isPreparingQuality = false
         selectedQuality = "original"
@@ -1191,14 +1163,12 @@ private struct DraggablePlayerView: View {
         startHideTimer()
     }
 
-    /// スライドショーの再生開始位置をランダムに決める (クリップ長ぶんの余裕を残す)
     private func randomStart(for video: RemoteVideoInfo) -> Double {
         let maxStart = video.duration - slideshowClipDuration
         guard maxStart > 1 else { return 0 }
         return Double.random(in: 0...maxStart)
     }
 
-    /// クリップ長ぶん再生したら次の動画へ送るタイマー
     private func scheduleSlideshowAdvance() {
         slideshowTask?.cancel()
         let dur = slideshowClipDuration
@@ -1233,7 +1203,6 @@ private struct DraggablePlayerView: View {
     private func toggleSlideshow() {
         isSlideshow.toggle()
         if isSlideshow {
-            // スライドショー開始時はランダムな位置から再生し、送りタイマーを開始
             playerManager.seek(toSeconds: randomStart(for: videos[currentIndex]))
             playerManager.player.play()
             scheduleSlideshowAdvance()
@@ -1262,7 +1231,6 @@ private struct DraggablePlayerView: View {
     }
 }
 
-// ★ 写真ビューアも動画と同様の操作感にアップグレード
 private struct RemotePhotoViewer: View { 
     let photos: [RemoteVideoInfo]
     @State private var currentIndex: Int
@@ -1333,7 +1301,6 @@ private struct RemotePhotoViewer: View {
                 } 
             }
             
-            // 左右の矢印ボタン
             HStack {
                 if currentIndex > 0 {
                     Button(action: { changePhoto(offset: -1) }) {
@@ -1348,7 +1315,6 @@ private struct RemotePhotoViewer: View {
                 }
             }
             
-            // 閉じるボタン
             VStack { 
                 HStack { 
                     Spacer()

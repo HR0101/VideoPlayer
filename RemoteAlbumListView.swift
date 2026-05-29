@@ -1,20 +1,15 @@
 import SwiftUI
 
-// ===================================
-//  RemoteAlbumListView.swift (完全振り分け版)
-// ===================================
-
 struct RemoteAlbumListView: View {
     let serverName: String
     let serverAddress: String
-    
+
     @State private var albums: [RemoteAlbumInfo] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
 
-    // 色定義
     private let primaryDarkColor = Color(red: 0.1, green: 0.1, blue: 0.1)
-    
+
     var body: some View {
         Group {
             if isLoading {
@@ -30,18 +25,14 @@ struct RemoteAlbumListView: View {
                 .foregroundColor(.white)
             } else {
                 List {
-                    // 1. ライブラリ (ALL VIDEOS)
-                    // 名前が "ALL VIDEOS" または タイプが "mixed" のものを抽出
                     if let mixed = albums.first(where: { $0.name == "ALL VIDEOS" || $0.type == "mixed" }) {
                         Section("ライブラリ") {
                             albumRow(album: mixed, icon: "square.stack.fill", color: .yellow)
                         }
                     }
-                    
-                    // ユーザー作成のアルバムだけを抽出（ALL VIDEOSを除く）
+
                     let userAlbums = albums.filter { $0.name != "ALL VIDEOS" && $0.type != "mixed" }
-                    
-                    // 2. 画像アルバム (type == "photo")
+
                     let photoAlbums = userAlbums.filter { $0.type == "photo" }
                     if !photoAlbums.isEmpty {
                         Section("画像アルバム") {
@@ -50,9 +41,8 @@ struct RemoteAlbumListView: View {
                             }
                         }
                     }
-                    
-                    // 3. 動画アルバム (type == "video" または typeが無いもの)
-                    // ※既存の古いアルバムは type が nil の可能性があるため、ここで拾います
+
+                    // typeがnilの古いアルバムは動画アルバムとして扱う
                     let videoAlbums = userAlbums.filter { $0.type == "video" || $0.type == nil }
                     if !videoAlbums.isEmpty {
                         Section("動画アルバム") {
@@ -77,10 +67,8 @@ struct RemoteAlbumListView: View {
             await fetchAlbumsFromServer()
         }
     }
-    
-    // 行のデザインを統一
+
     private func albumRow(album: RemoteAlbumInfo, icon: String, color: Color) -> some View {
-        // ★ 修正: allServerAlbums: albums を引数に追加しました
         NavigationLink(destination: RemoteVideoListView(serverName: album.name, serverAddress: serverAddress, albumID: album.id, allServerAlbums: albums)) {
             HStack {
                 Image(systemName: icon)
@@ -102,14 +90,14 @@ struct RemoteAlbumListView: View {
         .listRowBackground(Color(white: 0.15))
         .listRowSeparatorTint(Color.white.opacity(0.2))
     }
-    
+
     private func fetchAlbumsFromServer() async {
         guard let url = URL(string: "\(serverAddress)/albums") else {
             errorMessage = "無効なサーバーアドレスです。"
             isLoading = false
             return
         }
-        
+
         do {
             let (data, _) = try await URLSession.shared.data(for: ServerAuth.request(url, address: serverAddress))
             self.albums = try JSONDecoder().decode([RemoteAlbumInfo].self, from: data)

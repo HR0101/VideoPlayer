@@ -46,6 +46,35 @@ enum ServerAuth {
     }
 }
 
+// MARK: - 再生履歴管理
+class PlaybackHistoryManager {
+    static let shared = PlaybackHistoryManager()
+    private let historyKey = "playback_history_ids"
+    private let maxHistoryCount = 50
+
+    func saveLastPlayed(id: String) {
+        var ids = getHistoryIDs()
+        if let index = ids.firstIndex(of: id) { ids.remove(at: index) }
+        ids.insert(id, at: 0)
+        if ids.count > maxHistoryCount { ids = Array(ids.prefix(maxHistoryCount)) }
+        UserDefaults.standard.set(ids, forKey: historyKey)
+    }
+
+    func getHistoryIDs() -> [String] {
+        return UserDefaults.standard.stringArray(forKey: historyKey) ?? []
+    }
+
+    func removeHistory(id: String) {
+        var ids = getHistoryIDs()
+        if let index = ids.firstIndex(of: id) {
+            ids.remove(at: index)
+            UserDefaults.standard.set(ids, forKey: historyKey)
+        }
+    }
+
+    func getLastPlayedID() -> String? { getHistoryIDs().first }
+}
+
 // MARK: - お気に入り管理 (クライアント側・メディアIDで保持)
 @MainActor
 final class FavoritesManager: ObservableObject {

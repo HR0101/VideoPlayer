@@ -109,28 +109,25 @@ class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
     }
     
     private func saveToPhotoLibrary(from localURL: URL) {
+        let filename = currentFilename
+        let saveAsPhoto = isPhoto
         PHPhotoLibrary.shared().performChanges({
-            if self.isPhoto {
+            if saveAsPhoto {
                 PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: localURL)
             } else {
                 PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: localURL)
             }
-        }) { success, error in
-            DispatchQueue.main.async {
-                self.isDownloading = false
-                
-                // 処理が終わったら一時ファイルを削除
+        }) { [weak self] success, error in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
                 try? FileManager.default.removeItem(at: localURL)
-                
+                self.isDownloading = false
                 if success {
-                    self.successMessage = "「\(self.currentFilename)」を保存しました"
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                        self.successMessage = nil
-                    }
+                    self.successMessage = "「\(filename)」を保存しました"
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    self.successMessage = nil
                 } else {
-                    let errorMsg = error?.localizedDescription ?? "不明なエラー"
-                    // エラーコード3302などが含まれる場合がある
-                    self.errorMessage = "写真アプリへの保存に失敗しました: \(errorMsg)"
+                    self.errorMessage = "写真アプリへの保存に失敗しました: \(error?.localizedDescription ?? "不明なエラー")"
                 }
             }
         }

@@ -8,7 +8,7 @@ import SwiftUI
 
 // MARK: - Enums
 
-enum AlbumType: Hashable, Identifiable {
+enum AlbumType: Hashable, Identifiable, Sendable {
     case all
     case trash
     case user(String)
@@ -58,4 +58,22 @@ struct VideoMetadata: Identifiable, Equatable {
 struct IdentifiableURL: Identifiable {
     let id = UUID()
     let url: URL
+}
+
+// MARK: - Remote Sort Order
+enum RemoteSortOrder: String, CaseIterable, Identifiable {
+    case importDescending  = "追加日が新しい順"
+    case importAscending   = "追加日が古い順"
+    case creationDescending = "撮影日が新しい順"
+    case creationAscending  = "撮影日が古い順"
+    case durationDescending = "長さが長い順"
+    case durationAscending  = "長さが短い順"
+    var id: String { rawValue }
+}
+
+// MARK: - App Theme Colors
+extension Color {
+    static let appGold           = Color(red: 0.85, green: 0.73, blue: 0.45)
+    static let appDarkBackground = Color(red: 0.05, green: 0.05, blue: 0.08)
+    static let appDarkSurface    = Color(red: 0.10, green: 0.10, blue: 0.14)
 }

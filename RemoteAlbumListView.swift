@@ -113,10 +113,6 @@ struct RemoteAlbumListView: View {
         do {
             let (data, _) = try await URLSession.shared.data(for: ServerAuth.request(url, address: serverAddress))
             self.albums = try JSONDecoder().decode([RemoteAlbumInfo].self, from: data)
-            // デバッグ用: 受信したデータの中身を確認
-            for album in self.albums {
-                print("📦 Album: \(album.name), Type: \(album.type ?? "nil")")
-            }
         } catch {
             errorMessage = "アルバムリストの取得に失敗しました。\n\(error.localizedDescription)"
         }

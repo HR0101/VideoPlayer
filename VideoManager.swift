@@ -58,29 +58,34 @@ class VideoManager: ObservableObject {
     }
     
     // MARK: - Video Fetching
-    func fetchVideos(for albumType: AlbumType) -> [URL] {
-        var videoURLs: [URL] = []
-        do {
-            switch albumType {
-            case .all:
-                for albumName in albums {
-                    let albumURL = rootDirectory.appendingPathComponent(albumName)
-                    videoURLs.append(contentsOf: try FileManager.default.contentsOfDirectory(at: albumURL, includingPropertiesForKeys: nil))
+    func fetchVideos(for albumType: AlbumType) async -> [URL] {
+        let rootDir   = rootDirectory
+        let trashDir  = trashDirectory
+        let albumList = albums
+        return await Task.detached(priority: .userInitiated) {
+            var videoURLs: [URL] = []
+            do {
+                switch albumType {
+                case .all:
+                    for albumName in albumList {
+                        let albumURL = rootDir.appendingPathComponent(albumName)
+                        videoURLs.append(contentsOf: try FileManager.default.contentsOfDirectory(at: albumURL, includingPropertiesForKeys: nil))
+                    }
+                case .trash:
+                    videoURLs = try FileManager.default.contentsOfDirectory(at: trashDir, includingPropertiesForKeys: nil)
+                case .user(let albumName):
+                    let albumURL = rootDir.appendingPathComponent(albumName)
+                    videoURLs = try FileManager.default.contentsOfDirectory(at: albumURL, includingPropertiesForKeys: nil)
                 }
-            case .trash:
-                videoURLs = try FileManager.default.contentsOfDirectory(at: trashDirectory, includingPropertiesForKeys: nil)
-            case .user(let albumName):
-                let albumURL = rootDirectory.appendingPathComponent(albumName)
-                videoURLs = try FileManager.default.contentsOfDirectory(at: albumURL, includingPropertiesForKeys: nil)
+            } catch {
+                print("Error fetching videos for \(albumType): \(error)")
+                return []
             }
             return videoURLs.filter { url in
-                let pathExtension = url.pathExtension.lowercased()
-                return (pathExtension == "mov" || pathExtension == "mp4") && !url.lastPathComponent.hasPrefix(".")
+                let ext = url.pathExtension.lowercased()
+                return (ext == "mov" || ext == "mp4") && !url.lastPathComponent.hasPrefix(".")
             }
-        } catch {
-            print("Error fetching videos for \(albumType): \(error)")
-            return []
-        }
+        }.value
     }
 
     // MARK: - Video Operations
@@ -149,8 +154,8 @@ class VideoManager: ObservableObject {
         }
     }
 
-    func emptyTrash() {
-        let trashItems = fetchVideos(for: .trash)
+    func emptyTrash() async {
+        let trashItems = await fetchVideos(for: .trash)
         for item in trashItems { deletePermanently(url: item) }
     }
 
@@ -166,22 +171,18 @@ class VideoManager: ObservableObject {
     }
 
     private func getExtendedAttribute(at url: URL, name: String) throws -> String? {
-        let bufferSize = 256
-        var buffer = [CChar](repeating: 0, count: bufferSize)
-        let readBytes = getxattr(url.path, name, &buffer, bufferSize, 0, 0)
+        let size = getxattr(url.path, name, nil, 0, 0, 0)
+        if size == -1 {
+            if errno == ENOATTR { return nil }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Failed to get extended attribute."])
+        }
+        if size == 0 { return "" }
 
-        if readBytes > 0 {
-            return String(cString: buffer)
-        }
-        
-        if readBytes == -1 && errno == ENOATTR {
-            return nil
-        }
-        
+        var buffer = [UInt8](repeating: 0, count: size)
+        let readBytes = getxattr(url.path, name, &buffer, size, 0, 0)
         if readBytes == -1 {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Failed to get extended attribute."])
         }
-        
-        return nil
+        return String(bytes: buffer.prefix(readBytes), encoding: .utf8)
     }
 }

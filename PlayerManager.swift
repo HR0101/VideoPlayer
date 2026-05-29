@@ -27,8 +27,11 @@ final class PlayerManager: ObservableObject {
         addPeriodicObserver()
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.onEnded?() }
+        ) { [weak self] notification in
+            guard let self,
+                  let endedItem = notification.object as? AVPlayerItem,
+                  endedItem === self.player.currentItem else { return }
+            Task { @MainActor in self.onEnded?() }
         }
         setupPlayer(with: videoURL)
     }

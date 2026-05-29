@@ -137,9 +137,8 @@ struct VideoGridView: View {
     @State private var dragSelectionMode: DragSelectionState = .inactive
     @GestureState private var dragValue: DragGesture.Value? = nil
     
-    // ★ 追加: カスタムカラー定義
-    private let primaryDarkColor = Color(red: 0.1, green: 0.1, blue: 0.1)
-    private let accentGlowColor = Color.cyan
+    private let primaryDarkColor = Color.appDarkBackground
+    private let accentGlowColor  = Color.appGold
 
 
     private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
@@ -505,7 +504,7 @@ struct VideoGridView: View {
 
     private func loadVideos() {
         Task {
-            let urls = videoManager.fetchVideos(for: albumType)
+            let urls = await videoManager.fetchVideos(for: albumType)
             var metadatas: [VideoMetadata] = []
             for url in urls {
                 do {
@@ -535,7 +534,9 @@ struct VideoGridView: View {
     }
 
     private func emptyTrash() {
-        videoManager.emptyTrash()
-        loadVideos()
+        Task {
+            await videoManager.emptyTrash()
+            loadVideos()
+        }
     }
 }

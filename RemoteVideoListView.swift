@@ -12,40 +12,6 @@ import AppKit
 //  RemoteVideoListView.swift (ピッカー名前衝突回避版)
 
 
-class PlaybackHistoryManager {
-    static let shared = PlaybackHistoryManager()
-    private let historyKey = "playback_history_ids"
-    private let maxHistoryCount = 50
-    
-    func saveLastPlayed(id: String) {
-        var ids = getHistoryIDs()
-        if let index = ids.firstIndex(of: id) {
-            ids.remove(at: index)
-        }
-        ids.insert(id, at: 0)
-        if ids.count > maxHistoryCount {
-            ids = Array(ids.prefix(maxHistoryCount))
-        }
-        UserDefaults.standard.set(ids, forKey: historyKey)
-    }
-    
-    func getHistoryIDs() -> [String] {
-        return UserDefaults.standard.stringArray(forKey: historyKey) ?? []
-    }
-    
-    func removeHistory(id: String) {
-        var ids = getHistoryIDs()
-        if let index = ids.firstIndex(of: id) {
-            ids.remove(at: index)
-            UserDefaults.standard.set(ids, forKey: historyKey)
-        }
-    }
-    
-    func getLastPlayedID() -> String? {
-        return getHistoryIDs().first
-    }
-}
-
 // MARK: - メインビュー
 struct RemoteVideoListView: View {
     let serverName: String
@@ -83,22 +49,14 @@ struct RemoteVideoListView: View {
     @EnvironmentObject var downloadManager: DownloadManager
     @ObservedObject private var favorites = FavoritesManager.shared
 
-    enum SortOrder: String, CaseIterable {
-        case importDescending = "追加日が新しい順"
-        case importAscending = "追加日が古い順"
-        case creationDescending = "撮影日が新しい順"
-        case creationAscending = "撮影日が古い順"
-        case durationDescending = "長さが長い順"
-        case durationAscending = "長さが短い順"
-    }
-    @State private var currentSortOrder: SortOrder = .importDescending
+    @State private var currentSortOrder: RemoteSortOrder = .importDescending
 
-    private let primaryDarkColor = Color(red: 0.05, green: 0.05, blue: 0.08)
-    private let accentGlowColor = Color(red: 0.85, green: 0.73, blue: 0.45)
+    private let primaryDarkColor = Color.appDarkBackground
+    private let accentGlowColor  = Color.appGold
 
     private var backgroundGradient: some View {
         LinearGradient(
-            colors: [Color(red: 0.05, green: 0.05, blue: 0.08), Color(red: 0.10, green: 0.10, blue: 0.14)],
+            colors: [Color.appDarkBackground, Color.appDarkSurface],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
@@ -123,12 +81,12 @@ struct RemoteVideoListView: View {
         }
 
         switch currentSortOrder {
-        case .importDescending: return filtered.sorted { $0.importDate > $1.importDate }
-        case .importAscending: return filtered.sorted { $0.importDate < $1.importDate }
+        case .importDescending:   return filtered.sorted { $0.importDate > $1.importDate }
+        case .importAscending:    return filtered.sorted { $0.importDate < $1.importDate }
         case .creationDescending: return filtered.sorted { ($0.creationDate ?? $0.importDate) > ($1.creationDate ?? $1.importDate) }
-        case .creationAscending: return filtered.sorted { ($0.creationDate ?? $0.importDate) < ($1.creationDate ?? $1.importDate) }
+        case .creationAscending:  return filtered.sorted { ($0.creationDate ?? $0.importDate) < ($1.creationDate ?? $1.importDate) }
         case .durationDescending: return filtered.sorted { $0.duration > $1.duration }
-        case .durationAscending: return filtered.sorted { $0.duration < $1.duration }
+        case .durationAscending:  return filtered.sorted { $0.duration < $1.duration }
         }
     }
 
@@ -207,7 +165,7 @@ struct RemoteVideoListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "検索")
         .toolbarColorScheme(.dark, for: .navigationBar)
-        .toolbarBackground(primaryDarkColor, for: .navigationBar)
+        .toolbarBackground(Color.appDarkBackground, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -250,7 +208,7 @@ struct RemoteVideoListView: View {
                     
                     if !isVirtualAlbum {
                         Menu {
-                            Picker("並び替え", selection: $currentSortOrder) { ForEach(SortOrder.allCases, id: \.self) { order in Text(order.rawValue).tag(order) } }
+                            Picker("並び替え", selection: $currentSortOrder) { ForEach(RemoteSortOrder.allCases, id: \.self) { order in Text(order.rawValue).tag(order) } }
                         } label: { Image(systemName: "arrow.up.arrow.down.circle").foregroundColor(accentGlowColor) }
                     }
                 }
@@ -511,10 +469,10 @@ struct RemoteVideoListView: View {
                 .listRowBackground(Color.white.opacity(0.05))
             }
             .scrollContentBackground(.hidden)
-            .background(primaryDarkColor.ignoresSafeArea())
+            .background(Color.appDarkBackground.ignoresSafeArea())
             .navigationTitle("移動先を選択").navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbarBackground(primaryDarkColor, for: .navigationBar)
+            .toolbarBackground(Color.appDarkBackground, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("キャンセル") { showMoveTargetSheet = false }.foregroundColor(accentGlowColor) } }
         }
@@ -800,7 +758,7 @@ struct ServerDocumentPicker: UIViewControllerRepresentable {
 private struct RemoteVideoThumbnailView: View {
     let thumbnailURL: URL?
     let duration: TimeInterval
-    private let primaryDarkColor = Color(red: 0.08, green: 0.08, blue: 0.1)
+    private let primaryDarkColor = Color.appDarkBackground
     
     var body: some View {
         ZStack {
@@ -809,7 +767,7 @@ private struct RemoteVideoThumbnailView: View {
                 switch phase {
                 case .success(let image): image.resizable().aspectRatio(contentMode: .fill)
                 case .failure: Image(systemName: "photo").font(.largeTitle).foregroundColor(.white.opacity(0.2))
-                default: ProgressView().tint(Color(red: 0.85, green: 0.73, blue: 0.45))
+                default: ProgressView().tint(Color.appGold)
                 }
             }
         }
@@ -854,7 +812,7 @@ private struct DraggablePlayerView: View {
     @AppStorage("slideshowClipDuration") private var slideshowClipDuration: Double = 10
     @State private var slideshowTask: Task<Void, Never>? = nil
 
-    private let accentGlowColor = Color(red: 0.85, green: 0.73, blue: 0.45)
+    private let accentGlowColor = Color.appGold
 
     init(videos: [RemoteVideoInfo], initialIndex: Int, serverAddress: String, videoToPlay: Binding<RemoteVideoInfo?>, playingVideoID: Binding<String?>) {
         self.videos = videos
@@ -1435,14 +1393,130 @@ private struct RemotePhotoViewer: View {
     }
 }
 
-private struct VideoInfoSheetView: View { 
-    let video: RemoteVideoInfo; let serverAddress: String; @Environment(\.dismiss) var dismiss; var downloadManager: DownloadManager?
-    private let bgGradient = LinearGradient(colors: [Color(red: 0.05, green: 0.05, blue: 0.08), Color(red: 0.1, green: 0.1, blue: 0.14)], startPoint: .top, endPoint: .bottom)
-    private let accentColor = Color(red: 0.85, green: 0.73, blue: 0.45)
-    var body: some View { NavigationView { ScrollView { VStack(spacing: 24) { RemoteVideoThumbnailView(thumbnailURL: ServerAuth.mediaURL(address: serverAddress, path: "/thumbnail/\(video.id)"), duration: video.duration).aspectRatio(16/9, contentMode: .fit).cornerRadius(20).overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.15), lineWidth: 1)).shadow(color: .black.opacity(0.5), radius: 15, x: 0, y: 10).padding(.horizontal, 20).padding(.top, 24); Button(action: startDownload) { HStack { Image(systemName: "square.and.arrow.down"); Text("写真アプリに保存").fontWeight(.bold) }.frame(maxWidth: .infinity).padding().background(LinearGradient(colors: [accentColor, accentColor.opacity(0.8)], startPoint: .leading, endPoint: .trailing)).foregroundColor(Color(red: 0.1, green: 0.1, blue: 0.1)).cornerRadius(16).shadow(color: accentColor.opacity(0.2), radius: 8, x: 0, y: 4) }.padding(.horizontal, 20); VStack(alignment: .leading, spacing: 16) { InfoRow(title: "ファイル名", value: video.filename, isMain: true); Divider().background(Color.white.opacity(0.2)); HStack { if !video.isPhoto { VStack(alignment: .leading) { Text("長さ").font(.caption).foregroundColor(.white.opacity(0.6)); Text(formatDuration(video.duration)).font(.subheadline.weight(.semibold)).foregroundColor(.white) }; Spacer() }; VStack(alignment: .leading) { Text("インポート日").font(.caption).foregroundColor(.white.opacity(0.6)); Text(video.importDate, style: .date).font(.subheadline.weight(.semibold)).foregroundColor(.white) }; if !video.isPhoto { Spacer() } }; if let creationDate = video.creationDate { Divider().background(Color.white.opacity(0.2)); VStack(alignment: .leading) { Text("撮影日時").font(.caption).foregroundColor(.white.opacity(0.6)); Text(creationDate, style: .date).font(.subheadline.weight(.semibold)).foregroundColor(.white) } }; Divider().background(Color.white.opacity(0.2)); InfoRow(title: "種類", value: video.isPhoto ? "画像" : "動画", isMain: false) }.padding(24).background(.ultraThinMaterial).cornerRadius(24).overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.1), lineWidth: 0.5)).padding(.horizontal, 20); Spacer(minLength: 40) } }.background(bgGradient.ignoresSafeArea()).navigationTitle("詳細情報").navigationBarTitleDisplayMode(.inline).toolbarColorScheme(.dark, for: .navigationBar).toolbarBackground(Color(red: 0.05, green: 0.05, blue: 0.08), for: .navigationBar).toolbarBackground(.visible, for: .navigationBar).toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("完了") { dismiss() }.font(.body.weight(.bold)).foregroundColor(accentColor) } } } } 
-    private func startDownload() { guard let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(video.id)") else { return }; downloadManager?.startDownload(url: url, filename: video.filename, isPhoto: video.duration == 0); dismiss() }
-    private struct InfoRow: View { let title: String; let value: String; var isMain: Bool = false; var body: some View { VStack(alignment: .leading, spacing: 5) { Text(title).font(.caption).foregroundColor(.white.opacity(0.6)); Text(value).font(isMain ? .headline.weight(.bold) : .subheadline.weight(.semibold)).foregroundColor(.white) } } }
-    private func formatDuration(_ totalSeconds: TimeInterval) -> String { let s = Int(totalSeconds); return String(format: "%d:%02d", s / 60, s % 60) } 
+private struct VideoInfoSheetView: View {
+    let video: RemoteVideoInfo
+    let serverAddress: String
+    @Environment(\.dismiss) var dismiss
+    var downloadManager: DownloadManager?
+
+    private let bgGradient = LinearGradient(
+        colors: [Color.appDarkBackground, Color.appDarkSurface],
+        startPoint: .top,
+        endPoint: .bottom
+    )
+    private let accentColor = Color.appGold
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(spacing: 24) {
+                    RemoteVideoThumbnailView(
+                        thumbnailURL: ServerAuth.mediaURL(address: serverAddress, path: "/thumbnail/\(video.id)"),
+                        duration: video.duration
+                    )
+                    .aspectRatio(16/9, contentMode: .fit)
+                    .cornerRadius(20)
+                    .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.15), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.5), radius: 15, x: 0, y: 10)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 24)
+
+                    Button(action: startDownload) {
+                        HStack {
+                            Image(systemName: "square.and.arrow.down")
+                            Text("写真アプリに保存").fontWeight(.bold)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(LinearGradient(colors: [accentColor, accentColor.opacity(0.8)], startPoint: .leading, endPoint: .trailing))
+                        .foregroundColor(Color.appDarkSurface)
+                        .cornerRadius(16)
+                        .shadow(color: accentColor.opacity(0.2), radius: 8, x: 0, y: 4)
+                    }
+                    .padding(.horizontal, 20)
+
+                    VStack(alignment: .leading, spacing: 16) {
+                        InfoRow(title: "ファイル名", value: video.filename, isMain: true)
+                        Divider().background(Color.white.opacity(0.2))
+                        HStack {
+                            if !video.isPhoto {
+                                VStack(alignment: .leading) {
+                                    Text("長さ").font(.caption).foregroundColor(.white.opacity(0.6))
+                                    Text(formatDuration(video.duration))
+                                        .font(.subheadline.weight(.semibold)).foregroundColor(.white)
+                                }
+                                Spacer()
+                            }
+                            VStack(alignment: .leading) {
+                                Text("インポート日").font(.caption).foregroundColor(.white.opacity(0.6))
+                                Text(video.importDate, style: .date)
+                                    .font(.subheadline.weight(.semibold)).foregroundColor(.white)
+                            }
+                            if !video.isPhoto { Spacer() }
+                        }
+                        if let creationDate = video.creationDate {
+                            Divider().background(Color.white.opacity(0.2))
+                            VStack(alignment: .leading) {
+                                Text("撮影日時").font(.caption).foregroundColor(.white.opacity(0.6))
+                                Text(creationDate, style: .date)
+                                    .font(.subheadline.weight(.semibold)).foregroundColor(.white)
+                            }
+                        }
+                        Divider().background(Color.white.opacity(0.2))
+                        InfoRow(title: "種類", value: video.isPhoto ? "画像" : "動画", isMain: false)
+                    }
+                    .padding(24)
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(24)
+                    .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.1), lineWidth: 0.5))
+                    .padding(.horizontal, 20)
+
+                    Spacer(minLength: 40)
+                }
+            }
+            .background(bgGradient.ignoresSafeArea())
+            .navigationTitle("詳細情報")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbarBackground(Color.appDarkBackground, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("完了") { dismiss() }
+                        .font(.body.weight(.bold))
+                        .foregroundColor(accentColor)
+                }
+            }
+        }
+    }
+
+    private func startDownload() {
+        guard let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(video.id)") else { return }
+        downloadManager?.startDownload(url: url, filename: video.filename, isPhoto: video.duration == 0)
+        dismiss()
+    }
+
+    private func formatDuration(_ totalSeconds: TimeInterval) -> String {
+        let s = Int(totalSeconds)
+        return String(format: "%d:%02d", s / 60, s % 60)
+    }
+
+    private struct InfoRow: View {
+        let title: String
+        let value: String
+        var isMain: Bool = false
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
+                Text(value)
+                    .font(isMain ? .headline.weight(.bold) : .subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+            }
+        }
+    }
 }
 
 // MARK: - Shake Gesture Components

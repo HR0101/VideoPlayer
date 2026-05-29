@@ -32,7 +32,7 @@ struct LocalVideoThumbnailView: View {
                     .foregroundColor(.white)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
-                    .background(Color.black.opacity(0))
+                    .background(Color.black.opacity(0.5))
                     .cornerRadius(4)
                     .padding(4)
             }

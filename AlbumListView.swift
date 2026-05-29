@@ -29,20 +29,19 @@ struct AlbumListView: View {
     @State private var showShutdownConfirm = false
     
     // ★ リストとグリッドの表示切り替えフラグ
-    @AppStorage("isAlbumListViewMode") private var isListViewMode = false
+    @AppStorage("isListViewMode") private var isListViewMode = false
     
     private let specialAlbums: [(type: AlbumType, name: String, icon: String)] = [
         (.all, "すべてのビデオ", "square.stack.fill"),
         (.trash, "ごみ箱", "trash.fill")
     ]
     
-    // ★ プレミアムカラー定義: 深みのあるミッドナイトブルーとシャンパンゴールド
-    private let primaryDarkColor = Color(red: 0.05, green: 0.05, blue: 0.08)
-    private let accentGlowColor = Color(red: 0.85, green: 0.73, blue: 0.45)
+    private let primaryDarkColor = Color.appDarkBackground
+    private let accentGlowColor  = Color.appGold
 
     private var backgroundGradient: some View {
         LinearGradient(
-            colors: [Color(red: 0.05, green: 0.05, blue: 0.08), Color(red: 0.10, green: 0.10, blue: 0.14)],
+            colors: [Color.appDarkBackground, Color.appDarkSurface],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
@@ -434,7 +433,7 @@ struct AlbumListView: View {
         NavigationLink(destination: RemoteVideoListView(serverName: title, serverAddress: address, albumID: albumID, allServerAlbums: serverManager.albums)) {
             VStack(alignment: .leading, spacing: 10) {
                 ZStack {
-                    LinearGradient(colors: [tint.opacity(0.35), Color(red: 0.1, green: 0.1, blue: 0.14)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    LinearGradient(colors: [tint.opacity(0.35), Color.appDarkSurface], startPoint: .topLeading, endPoint: .bottomTrailing)
                     Image(systemName: icon)
                         .font(.system(size: 44, weight: .light))
                         .foregroundColor(tint)
@@ -469,7 +468,7 @@ struct AlbumListView: View {
         NavigationLink(destination: RemoteVideoListView(serverName: title, serverAddress: address, albumID: albumID, allServerAlbums: serverManager.albums)) {
             HStack(spacing: 16) {
                 ZStack {
-                    LinearGradient(colors: [tint.opacity(0.35), Color(red: 0.1, green: 0.1, blue: 0.14)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    LinearGradient(colors: [tint.opacity(0.35), Color.appDarkSurface], startPoint: .topLeading, endPoint: .bottomTrailing)
                     Image(systemName: icon).font(.system(size: 28, weight: .light)).foregroundColor(tint)
                 }
                 .frame(width: 72, height: 72)
@@ -567,7 +566,7 @@ struct LocalAlbumCoverView: View {
             if !hasFetched {
                 hasFetched = true
                 Task {
-                    let urls = await MainActor.run { videoManager.fetchVideos(for: albumType) }
+                    let urls = await videoManager.fetchVideos(for: albumType)
                     coverURL = urls.first
                 }
             }

@@ -5,6 +5,75 @@ import Network
 //  ServerModels.swift
 // ===================================
 
+// MARK: - 認証ヘルパー (サーバーごとのPINを保持)
+enum ServerAuth {
+    private static let prefix = "serverPIN_"
+
+    /// アドレスからホスト単位の安定キーを生成 (ポートやパスの違いを無視)
+    static func key(for address: String) -> String {
+        if let url = URL(string: address), let host = url.host { return prefix + host }
+        return prefix + address
+    }
+
+    static func pin(for address: String) -> String? {
+        let v = UserDefaults.standard.string(forKey: key(for: address))
+        return (v?.isEmpty == false) ? v : nil
+    }
+
+    static func setPIN(_ pin: String, for address: String) {
+        UserDefaults.standard.set(pin, forKey: key(for: address))
+    }
+
+    static func clear(for address: String) {
+        UserDefaults.standard.removeObject(forKey: key(for: address))
+    }
+
+    /// JSON系リクエスト用: PINをヘッダに付与
+    static func request(_ url: URL, address: String, method: String = "GET") -> URLRequest {
+        var req = URLRequest(url: url)
+        req.httpMethod = method
+        if let pin = pin(for: address) { req.setValue(pin, forHTTPHeaderField: "X-Auth-PIN") }
+        return req
+    }
+
+    /// メディアURL用 (AsyncImage / AVPlayer はヘッダを付けられないため pin をクエリに付与)
+    static func mediaURL(address: String, path: String, query: [URLQueryItem] = []) -> URL? {
+        guard var comps = URLComponents(string: address + path) else { return nil }
+        var items = query
+        if let pin = pin(for: address) { items.append(URLQueryItem(name: "pin", value: pin)) }
+        if !items.isEmpty { comps.queryItems = items }
+        return comps.url
+    }
+}
+
+// MARK: - お気に入り管理 (クライアント側・メディアIDで保持)
+@MainActor
+final class FavoritesManager: ObservableObject {
+    static let shared = FavoritesManager()
+    private let key = "favorite_media_ids"
+    @Published private(set) var ids: Set<String> = []
+
+    private init() {
+        ids = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+    }
+
+    func isFavorite(_ id: String) -> Bool { ids.contains(id) }
+
+    func toggle(_ id: String) {
+        if ids.contains(id) { ids.remove(id) } else { ids.insert(id) }
+        persist()
+    }
+
+    func remove(_ id: String) {
+        ids.remove(id)
+        persist()
+    }
+
+    private func persist() {
+        UserDefaults.standard.set(Array(ids), forKey: key)
+    }
+}
+
 // MARK: - API通信マネージャー (NAS機能用)
 class ServerAPI {
     
@@ -14,6 +83,7 @@ class ServerAPI {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let pin = ServerAuth.pin(for: serverAddress) { request.setValue(pin, forHTTPHeaderField: "X-Auth-PIN") }
         let body = ["name": name, "type": type]
         request.httpBody = try JSONEncoder().encode(body)
         
@@ -26,7 +96,8 @@ class ServerAPI {
         guard let url = URL(string: "\(serverAddress)/albums/\(albumID)") else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
-        
+        if let pin = ServerAuth.pin(for: serverAddress) { request.setValue(pin, forHTTPHeaderField: "X-Auth-PIN") }
+
         let (_, response) = try await URLSession.shared.data(for: request)
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
@@ -37,7 +108,8 @@ class ServerAPI {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
+        if let pin = ServerAuth.pin(for: serverAddress) { request.setValue(pin, forHTTPHeaderField: "X-Auth-PIN") }
+
         struct MoveReq: Codable { let videoIds: [String]; let sourceAlbumId: String; let targetAlbumId: String }
         let body = MoveReq(videoIds: videoIDs, sourceAlbumId: sourceAlbumID, targetAlbumId: targetAlbumID)
         request.httpBody = try JSONEncoder().encode(body)
@@ -52,7 +124,8 @@ class ServerAPI {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
+        if let pin = ServerAuth.pin(for: serverAddress) { request.setValue(pin, forHTTPHeaderField: "X-Auth-PIN") }
+
         struct DelReq: Codable { let videoIds: [String]; let albumId: String }
         let body = DelReq(videoIds: videoIDs, albumId: albumID)
         request.httpBody = try JSONEncoder().encode(body)
@@ -72,6 +145,7 @@ class ServerAPI {
         let filename = fileURL.lastPathComponent.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "upload"
         request.setValue(filename, forHTTPHeaderField: "X-Filename")
         request.setValue(albumID, forHTTPHeaderField: "X-Album-Id")
+        if let pin = ServerAuth.pin(for: serverAddress) { request.setValue(pin, forHTTPHeaderField: "X-Auth-PIN") }
         
         // uploadタスクでファイルを送信
         let (_, response) = try await URLSession.shared.upload(for: request, fromFile: fileURL)
@@ -166,6 +240,9 @@ class ServerManager: ObservableObject {
     @Published var albums: [RemoteAlbumInfo] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
+    @Published var authRequired = false
+
+    private(set) var currentAddress: String?
 
     func updateServer(_ newServer: DiscoveredServer?) {
         guard let newServer = newServer, let address = newServer.address else {
@@ -173,7 +250,7 @@ class ServerManager: ObservableObject {
             self.albums = []
             return
         }
-        
+
         if self.server?.id != newServer.id || self.albums.isEmpty {
             self.server = newServer
             Task {
@@ -181,19 +258,35 @@ class ServerManager: ObservableObject {
             }
         }
     }
-    
+
+    /// ユーザーが入力したPINを保存し、再取得を試みる
+    func submitPIN(_ pin: String) {
+        guard let address = currentAddress else { return }
+        ServerAuth.setPIN(pin, for: address)
+        authRequired = false
+        Task { await fetchAlbums(serverAddress: address) }
+    }
+
     func fetchAlbums(serverAddress: String) async {
+        currentAddress = serverAddress
         isLoading = true
         errorMessage = nil
-        
+
         guard let url = URL(string: "\(serverAddress)/albums") else {
             errorMessage = "無効なサーバーアドレスです。"
             isLoading = false
             return
         }
-        
+
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(for: ServerAuth.request(url, address: serverAddress))
+            if let http = response as? HTTPURLResponse, http.statusCode == 401 {
+                self.authRequired = true
+                self.albums = []
+                self.isLoading = false
+                return
+            }
+            self.authRequired = false
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             self.albums = try decoder.decode([RemoteAlbumInfo].self, from: data)

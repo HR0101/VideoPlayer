@@ -81,7 +81,8 @@ struct RemoteVideoListView: View {
     @State private var showDeletePrompt = false
     
     @EnvironmentObject var downloadManager: DownloadManager
-    
+    @ObservedObject private var favorites = FavoritesManager.shared
+
     enum SortOrder: String, CaseIterable {
         case importDescending = "追加日が新しい順"
         case importAscending = "追加日が古い順"
@@ -106,13 +107,21 @@ struct RemoteVideoListView: View {
 
     private var columns: [GridItem] { Array(repeating: GridItem(.flexible(), spacing: 8), count: gridColumnCount) }
 
+    private var emptyMessage: String {
+        switch albumID {
+        case "HISTORY": return "再生履歴はありません。"
+        case "FAVORITES": return "お気に入りに追加したメディアが\nここに表示されます。"
+        default: return "右上のアップロードボタンから\n動画や写真を追加してください。"
+        }
+    }
+
     private var sortedAndFilteredVideos: [RemoteVideoInfo] {
         let filtered = searchText.isEmpty ? videos : videos.filter { $0.filename.localizedCaseInsensitiveContains(searchText) }
         
-        if albumID == "HISTORY" {
+        if albumID == "HISTORY" || albumID == "FAVORITES" {
             return filtered
         }
-        
+
         switch currentSortOrder {
         case .importDescending: return filtered.sorted { $0.importDate > $1.importDate }
         case .importAscending: return filtered.sorted { $0.importDate < $1.importDate }
@@ -132,7 +141,7 @@ struct RemoteVideoListView: View {
                     ProgressView().tint(accentGlowColor).scaleEffect(1.2)
                 }
                 else if let errorMessage = errorMessage { placeholderView(icon: "exclamationmark.triangle.fill", title: "エラーが発生しました", message: errorMessage) }
-                else if videos.isEmpty { placeholderView(icon: "server.rack", title: "メディアがありません", message: albumID == "HISTORY" ? "再生履歴はありません。" : "右上のアップロードボタンから\n動画や写真を追加してください。") }
+                else if videos.isEmpty { placeholderView(icon: albumID == "FAVORITES" ? "heart.slash" : "server.rack", title: "メディアがありません", message: emptyMessage) }
                 else {
                     if isListViewMode {
                         videoList
@@ -175,7 +184,7 @@ struct RemoteVideoListView: View {
                                 .shadow(color: selectedVideoIDs.isEmpty ? .clear : Color.red.opacity(0.3), radius: 8, x: 0, y: 4)
                         }.disabled(selectedVideoIDs.isEmpty)
                         
-                        if albumID != "HISTORY" {
+                        if !isVirtualAlbum {
                             Button(action: { showMoveTargetSheet = true }) {
                                 Text("移動")
                                     .font(.headline.weight(.bold))
@@ -221,7 +230,7 @@ struct RemoteVideoListView: View {
                         .font(.body.weight(.bold))
                         .foregroundColor(accentGlowColor)
                 } else {
-                    if albumID != "HISTORY" {
+                    if !isVirtualAlbum {
                         Button(action: { showUploadSourceMenu = true }) {
                             Image(systemName: "icloud.and.arrow.up").foregroundColor(accentGlowColor)
                         }
@@ -239,7 +248,7 @@ struct RemoteVideoListView: View {
                     
                     Button(action: { withAnimation { isSelectionMode = true } }) { Text("選択").foregroundColor(accentGlowColor) }.disabled(videos.isEmpty)
                     
-                    if albumID != "HISTORY" {
+                    if !isVirtualAlbum {
                         Menu {
                             Picker("並び替え", selection: $currentSortOrder) { ForEach(SortOrder.allCases, id: \.self) { order in Text(order.rawValue).tag(order) } }
                         } label: { Image(systemName: "arrow.up.arrow.down.circle").foregroundColor(accentGlowColor) }
@@ -358,7 +367,7 @@ struct RemoteVideoListView: View {
     private func thumbnailCell(for video: RemoteVideoInfo) -> some View {
         let isLastPlayed = video.id == lastPlayedID
         ZStack(alignment: .topTrailing) {
-            RemoteVideoThumbnailView(thumbnailURL: URL(string: "\(serverAddress)/thumbnail/\(video.id)")!, duration: video.duration)
+            RemoteVideoThumbnailView(thumbnailURL: ServerAuth.mediaURL(address: serverAddress, path: "/thumbnail/\(video.id)"), duration: video.duration)
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(isLastPlayed ? accentGlowColor : Color.white.opacity(0.15), lineWidth: isLastPlayed ? 2.5 : 0.5))
                 .opacity(isSelectionMode && selectedVideoIDs.contains(video.id) ? 0.6 : 1.0)
             
@@ -368,6 +377,13 @@ struct RemoteVideoListView: View {
                     .font(.title3.weight(.bold)).foregroundColor(isSelected ? accentGlowColor : .white)
                     .padding(8)
                     .background(Group { if !isSelected { Color.black.opacity(0.4).clipShape(Circle()) } })
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            if favorites.isFavorite(video.id) {
+                Image(systemName: "heart.fill")
+                    .font(.caption).foregroundColor(.pink)
+                    .padding(6).background(.ultraThinMaterial).clipShape(Circle()).padding(8)
             }
         }
         .contentShape(Rectangle())
@@ -381,7 +397,7 @@ struct RemoteVideoListView: View {
         let isLastPlayed = video.id == lastPlayedID
         HStack(spacing: 16) {
             ZStack(alignment: .topTrailing) {
-                RemoteVideoThumbnailView(thumbnailURL: URL(string: "\(serverAddress)/thumbnail/\(video.id)")!, duration: video.duration)
+                RemoteVideoThumbnailView(thumbnailURL: ServerAuth.mediaURL(address: serverAddress, path: "/thumbnail/\(video.id)"), duration: video.duration)
                     .frame(width: 80, height: 80)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(isLastPlayed ? accentGlowColor : Color.white.opacity(0.15), lineWidth: isLastPlayed ? 2 : 0.5))
@@ -419,7 +435,13 @@ struct RemoteVideoListView: View {
                 }
             }
             Spacer()
-            
+
+            if favorites.isFavorite(video.id) {
+                Image(systemName: "heart.fill")
+                    .font(.subheadline)
+                    .foregroundColor(.pink)
+            }
+
             Image(systemName: "chevron.right")
                 .font(.subheadline)
                 .foregroundColor(Color.white.opacity(0.2))
@@ -454,9 +476,21 @@ struct RemoteVideoListView: View {
     @ViewBuilder
     private func videoContextMenu(_ video: RemoteVideoInfo) -> some View {
         Button { videoForInfoSheet = video } label: { Label("詳細情報", systemImage: "info.circle") }
-        Button { if let url = URL(string: "\(serverAddress)/video/\(video.id)") { downloadManager.startDownload(url: url, filename: video.filename, isPhoto: video.duration == 0) } } label: { Label("保存", systemImage: "square.and.arrow.down") }
-        
-        if serverName != "ALL VIDEOS" && serverName != "ALL PHOTOS" {
+        Button {
+            favorites.toggle(video.id)
+            if albumID == "FAVORITES" { Task { await fetchVideosFromServer() } }
+        } label: {
+            let fav = favorites.isFavorite(video.id)
+            Label(fav ? "お気に入りから削除" : "お気に入りに追加", systemImage: fav ? "heart.slash" : "heart")
+        }
+        Button { if let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(video.id)") { downloadManager.startDownload(url: url, filename: video.filename, isPhoto: video.duration == 0) } } label: { Label("保存", systemImage: "square.and.arrow.down") }
+
+        if albumID == "FAVORITES" {
+            Button(role: .destructive) {
+                favorites.remove(video.id)
+                Task { await fetchVideosFromServer() }
+            } label: { Label("お気に入りから削除", systemImage: "heart.slash") }
+        } else if serverName != "ALL VIDEOS" && serverName != "ALL PHOTOS" {
             if albumID == "HISTORY" {
                 Button(role: .destructive) {
                     PlaybackHistoryManager.shared.removeHistory(id: video.id)
@@ -487,22 +521,29 @@ struct RemoteVideoListView: View {
     }
     
     // MARK: - API Calls
+    private var isVirtualAlbum: Bool { albumID == "HISTORY" || albumID == "FAVORITES" }
+
+    /// すべての動画と写真を取得 (HISTORY / FAVORITES 用)
+    private func fetchAllMedia() async throws -> [RemoteVideoInfo] {
+        let libraryAlbums = allServerAlbums.filter { $0.name == "ALL VIDEOS" || $0.name == "ALL PHOTOS" }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var all: [RemoteVideoInfo] = []
+        for album in libraryAlbums {
+            guard let url = URL(string: "\(serverAddress)/albums/\(album.id)/videos") else { continue }
+            let (data, _) = try await URLSession.shared.data(for: ServerAuth.request(url, address: serverAddress))
+            all.append(contentsOf: try decoder.decode([RemoteVideoInfo].self, from: data))
+        }
+        return all
+    }
+
     private func fetchVideosFromServer() async {
         isLoading = true
         defer { isLoading = false }
-        
+
         if albumID == "HISTORY" {
-            guard let allVideosAlbum = allServerAlbums.first(where: { $0.name == "ALL VIDEOS" }),
-                  let url = URL(string: "\(serverAddress)/albums/\(allVideosAlbum.id)/videos") else {
-                errorMessage = "履歴を取得できません"
-                return
-            }
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                let decoder = JSONDecoder()
-                decoder.dateDecodingStrategy = .iso8601
-                let allVideos = try decoder.decode([RemoteVideoInfo].self, from: data)
-                
+                let allVideos = try await fetchAllMedia()
                 let historyIDs = PlaybackHistoryManager.shared.getHistoryIDs()
                 var historyVideos: [RemoteVideoInfo] = []
                 for id in historyIDs {
@@ -514,10 +555,18 @@ struct RemoteVideoListView: View {
             } catch {
                 errorMessage = "履歴取得失敗: \(error.localizedDescription)"
             }
+        } else if albumID == "FAVORITES" {
+            do {
+                let allMedia = try await fetchAllMedia()
+                let favIDs = FavoritesManager.shared.ids
+                self.videos = allMedia.filter { favIDs.contains($0.id) }
+            } catch {
+                errorMessage = "お気に入り取得失敗: \(error.localizedDescription)"
+            }
         } else {
             guard let url = URL(string: "\(serverAddress)/albums/\(albumID)/videos") else { return }
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
+                let (data, _) = try await URLSession.shared.data(for: ServerAuth.request(url, address: serverAddress))
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
                 self.videos = try decoder.decode([RemoteVideoInfo].self, from: data)
@@ -533,6 +582,11 @@ struct RemoteVideoListView: View {
         let ids = Array(selectedVideoIDs)
         if albumID == "HISTORY" {
             for id in ids { PlaybackHistoryManager.shared.removeHistory(id: id) }
+            isSelectionMode = false
+            selectedVideoIDs.removeAll()
+            Task { await fetchVideosFromServer() }
+        } else if albumID == "FAVORITES" {
+            for id in ids { favorites.remove(id) }
             isSelectionMode = false
             selectedVideoIDs.removeAll()
             Task { await fetchVideosFromServer() }
@@ -744,7 +798,7 @@ struct ServerDocumentPicker: UIViewControllerRepresentable {
 }
 
 private struct RemoteVideoThumbnailView: View {
-    let thumbnailURL: URL
+    let thumbnailURL: URL?
     let duration: TimeInterval
     private let primaryDarkColor = Color(red: 0.08, green: 0.08, blue: 0.1)
     
@@ -769,21 +823,39 @@ private struct RemoteVideoThumbnailView: View {
 }
 
 // ★ 画質切り替え＆前後スワイプ＆キーボードショートカット対応プレイヤー
+private enum RepeatMode { case off, all, one }
+
 private struct DraggablePlayerView: View {
     let videos: [RemoteVideoInfo]
     let serverAddress: String
-    
+
     @Binding var videoToPlay: RemoteVideoInfo?
     @Binding var playingVideoID: String?
-    
+
     @State private var currentIndex: Int
     @StateObject private var playerManager: PlayerManager
+    @ObservedObject private var favorites = FavoritesManager.shared
     @State private var dragOffset: CGSize = .zero
     @State private var selectedQuality: String = "original"
-    
+
+    // ★ 低画質(1080p)オンデマンド変換の状態
+    @State private var isPreparingQuality: Bool = false
+    @State private var prepareProgress: Double = 0
+    @State private var prepareTask: Task<Void, Never>? = nil
+
     @State private var showControls: Bool = true
     @State private var hideControlsTask: Task<Void, Never>? = nil
-    
+
+    // ★ 連続再生・シャッフル・リピート・スライドショー
+    @State private var isContinuous: Bool = true
+    @State private var isShuffle: Bool = false
+    @State private var repeatMode: RepeatMode = .off
+    @State private var isSlideshow: Bool = false
+    @AppStorage("slideshowClipDuration") private var slideshowClipDuration: Double = 10
+    @State private var slideshowTask: Task<Void, Never>? = nil
+
+    private let accentGlowColor = Color(red: 0.85, green: 0.73, blue: 0.45)
+
     init(videos: [RemoteVideoInfo], initialIndex: Int, serverAddress: String, videoToPlay: Binding<RemoteVideoInfo?>, playingVideoID: Binding<String?>) {
         self.videos = videos
         self._currentIndex = State(initialValue: initialIndex)
@@ -792,7 +864,7 @@ private struct DraggablePlayerView: View {
         self._playingVideoID = playingVideoID
         
         let initialVideo = videos[initialIndex]
-        let url = URL(string: "\(serverAddress)/video/\(initialVideo.id)")!
+        let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(initialVideo.id)") ?? URL(string: "\(serverAddress)/video/\(initialVideo.id)")!
         self._playerManager = StateObject(wrappedValue: PlayerManager(videoURL: url))
     }
     
@@ -824,38 +896,85 @@ private struct DraggablePlayerView: View {
             .opacity(1.0 - Double(max(abs(dragOffset.width), max(0, dragOffset.height)) / 300))
             
             if showControls {
-                VStack {
-                    HStack {
+                VStack(spacing: 14) {
+                    HStack(alignment: .top, spacing: 12) {
                         Text(videos[currentIndex].filename)
                             .font(.headline.weight(.semibold))
                             .foregroundColor(.white)
-                            .lineLimit(1)
-                            .padding(.top, 60)
-                            .padding(.leading, 20)
+                            .lineLimit(2)
                             .shadow(radius: 2)
-                        Spacer()
-                    }
-                    Spacer()
-                }
-                .transition(.opacity)
-                
-                VStack {
-                    HStack {
-                        Spacer()
+                        Spacer(minLength: 8)
                         Menu {
                             Button(action: { changeQuality("original") }) { if selectedQuality == "original" { Label("オリジナル", systemImage: "checkmark") } else { Text("オリジナル") } }
-                            Button(action: { changeQuality("1080p") }) { if selectedQuality == "1080p" { Label("1080p (高画質軽量)", systemImage: "checkmark") } else { Text("1080p (高画質軽量)") } }
-                            Button(action: { changeQuality("540p") }) { if selectedQuality == "540p" { Label("540p (データ節約)", systemImage: "checkmark") } else { Text("540p (データ節約)") } }
+                            Button(action: { changeQuality("1080p") }) { if selectedQuality == "1080p" { Label("1080p (軽量・変換)", systemImage: "checkmark") } else { Text("1080p (軽量・変換)") } }
                         } label: {
                             HStack(spacing: 6) { Image(systemName: "line.3.horizontal.decrease.circle"); Text(qualityLabel(selectedQuality)).font(.subheadline.bold()) }
-                            .padding(.horizontal, 16).padding(.vertical, 10).background(.ultraThinMaterial).overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 0.5)).clipShape(Capsule()).shadow(color: .black.opacity(0.3), radius: 5, x: 0, y: 2).foregroundColor(.white)
-                        }.padding(.top, 50).padding(.trailing, 20)
+                            .padding(.horizontal, 12).padding(.vertical, 8).background(.ultraThinMaterial).overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 0.5)).clipShape(Capsule()).shadow(color: .black.opacity(0.3), radius: 5, x: 0, y: 2).foregroundColor(.white)
+                        }
+                        Button(action: toggleFavorite) {
+                            Image(systemName: favorites.isFavorite(videos[currentIndex].id) ? "heart.fill" : "heart")
+                                .font(.title2)
+                                .foregroundColor(favorites.isFavorite(videos[currentIndex].id) ? .pink : .white)
+                                .shadow(radius: 2)
+                        }
                     }
+
+                    HStack(spacing: 22) {
+                        controlToggle(icon: "shuffle", active: isShuffle) { isShuffle.toggle(); startHideTimer() }
+                        controlToggle(icon: repeatMode == .one ? "repeat.1" : "repeat", active: repeatMode != .off) { cycleRepeatMode(); startHideTimer() }
+                        controlToggle(icon: "infinity", active: isContinuous) { isContinuous.toggle(); startHideTimer() }
+                        Menu {
+                            Button(isSlideshow ? "スライドショーを停止" : "スライドショーを開始") { toggleSlideshow(); startHideTimer() }
+                            Picker("1本あたりの秒数", selection: $slideshowClipDuration) {
+                                Text("5秒").tag(5.0)
+                                Text("10秒").tag(10.0)
+                                Text("15秒").tag(15.0)
+                                Text("30秒").tag(30.0)
+                                Text("60秒").tag(60.0)
+                            }
+                        } label: {
+                            Image(systemName: "play.square.stack")
+                                .foregroundColor(isSlideshow ? accentGlowColor : .white.opacity(0.6))
+                                .padding(8)
+                                .background(isSlideshow ? accentGlowColor.opacity(0.18) : Color.clear)
+                                .clipShape(Circle())
+                        }
+                    }
+                    .font(.subheadline)
+
                     Spacer()
                 }
-                .opacity(1.0 - Double(max(abs(dragOffset.width), max(0, dragOffset.height)) / 100)).transition(.opacity)
+                .padding(.top, 60)
+                .padding(.horizontal, 20)
+                .opacity(1.0 - Double(max(abs(dragOffset.width), max(0, dragOffset.height)) / 100))
+                .transition(.opacity)
             }
-            
+
+            // ★ 1080p変換中のオーバーレイ
+            if isPreparingQuality {
+                ZStack {
+                    Color.black.opacity(0.55).edgesIgnoringSafeArea(.all)
+                    VStack(spacing: 14) {
+                        ProgressView().scaleEffect(1.3).tint(.white)
+                        Text("1080pに変換中…").foregroundColor(.white).font(.headline)
+                        Text("\(Int(prepareProgress * 100))%")
+                            .foregroundColor(.white.opacity(0.85))
+                            .font(.subheadline.monospacedDigit())
+                        Button("キャンセル") {
+                            prepareTask?.cancel()
+                            isPreparingQuality = false
+                            selectedQuality = "original"
+                        }
+                        .foregroundColor(accentGlowColor)
+                        .padding(.top, 4)
+                    }
+                    .padding(28)
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(18)
+                }
+                .transition(.opacity)
+            }
+
             Group {
                 Button("") { togglePlayPause() }.keyboardShortcut(.space, modifiers: [])
                 Button("") { togglePlayPause() }.keyboardShortcut("k", modifiers: [])
@@ -888,7 +1007,7 @@ private struct DraggablePlayerView: View {
                 .onEnded { value in
                     let w = dragOffset.width
                     let h = dragOffset.height
-                    
+
                     if h > 100 && abs(h) > abs(w) {
                         playerManager.shutdown()
                         videoToPlay = nil
@@ -905,11 +1024,33 @@ private struct DraggablePlayerView: View {
                     }
                 }
         )
-        .onAppear { startHideTimer() }
-        .onDisappear { playerManager.shutdown() }
+        .onAppear {
+            startHideTimer()
+            playerManager.onEnded = { handlePlaybackEnded() }
+        }
+        .onReceive(playerManager.$isReadyToPlay) { ready in
+            // 各動画の再生開始時にスライドショー送りタイマーを仕掛ける
+            if ready && isSlideshow { scheduleSlideshowAdvance() }
+        }
+        .onDisappear {
+            slideshowTask?.cancel()
+            prepareTask?.cancel()
+            cleanupProxies()
+            playerManager.shutdown()
+        }
         .persistentSystemOverlays(.hidden)
     }
-    
+
+    private func controlToggle(icon: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .foregroundColor(active ? accentGlowColor : .white.opacity(0.6))
+                .padding(8)
+                .background(active ? accentGlowColor.opacity(0.18) : Color.clear)
+                .clipShape(Circle())
+        }
+    }
+
     // ショートカット操作用関数
     private func togglePlayPause() {
         if playerManager.isPlaying {
@@ -957,32 +1098,196 @@ private struct DraggablePlayerView: View {
     private func changeQuality(_ q: String) {
         selectedQuality = q
         let currentVideo = videos[currentIndex]
-        var components = URLComponents(string: "\(serverAddress)/video/\(currentVideo.id)")
-        components?.queryItems = [URLQueryItem(name: "q", value: q)]
-        if let newURL = components?.url {
-            playerManager.changeQuality(to: newURL)
+
+        // オリジナルは即切り替え
+        if q == "original" {
+            prepareTask?.cancel()
+            isPreparingQuality = false
+            if let newURL = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(currentVideo.id)") {
+                playerManager.changeQuality(to: newURL)
+            }
+            startHideTimer()
+            return
         }
-        startHideTimer()
+
+        // 1080p等はサーバーでオンデマンド変換 → 完成後に切り替え
+        prepareTask?.cancel()
+        prepareProgress = 0
+        withAnimation { isPreparingQuality = true }
+        prepareTask = Task { await prepareAndSwitch(video: currentVideo, quality: q) }
+    }
+
+    /// サーバーにプロキシ生成を要求し、完成するまでポーリングしてから画質を切り替える
+    @MainActor
+    private func prepareAndSwitch(video: RemoteVideoInfo, quality: String) async {
+        guard let prepareURL = ServerAuth.mediaURL(
+            address: serverAddress,
+            path: "/video/\(video.id)/prepare",
+            query: [URLQueryItem(name: "q", value: quality)]
+        ) else {
+            withAnimation { isPreparingQuality = false }
+            return
+        }
+        let req = ServerAuth.request(prepareURL, address: serverAddress)
+        struct PrepareResp: Codable { let state: String; let progress: Double }
+
+        // 最大10分ポーリング
+        for _ in 0..<600 {
+            if Task.isCancelled { return }
+            do {
+                let (data, _) = try await URLSession.shared.data(for: req)
+                if let resp = try? JSONDecoder().decode(PrepareResp.self, from: data) {
+                    prepareProgress = resp.progress
+                    if resp.state == "ready" {
+                        // 待っている間に別画質/別動画へ切り替わっていない場合のみ反映
+                        if selectedQuality == quality, video.id == videos[currentIndex].id,
+                           let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(video.id)", query: [URLQueryItem(name: "q", value: quality)]) {
+                            playerManager.changeQuality(to: url)
+                        }
+                        withAnimation { isPreparingQuality = false }
+                        startHideTimer()
+                        return
+                    }
+                }
+            } catch {
+                withAnimation { isPreparingQuality = false } // 通信失敗 → オリジナルのまま
+                selectedQuality = "original"
+                return
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        // タイムアウト
+        withAnimation { isPreparingQuality = false }
+        selectedQuality = "original"
+    }
+
+    /// 視聴を閉じたときにサーバー上のオンデマンドプロキシを削除する
+    private func cleanupProxies() {
+        let video = videos[currentIndex]
+        guard let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(video.id)/proxy") else { return }
+        let req = ServerAuth.request(url, address: serverAddress, method: "DELETE")
+        Task { _ = try? await URLSession.shared.data(for: req) }
     }
     
+    // 手動スワイプ・キーボード用 (相対移動)
     private func changeVideo(offset: Int) {
-        let newIndex = currentIndex + offset
+        advance(forward: offset > 0, auto: false)
+    }
+
+    /// 連続再生・シャッフル・リピートを考慮して次/前のインデックスへ移動する。
+    /// auto=true は自動送り (再生終了・スライドショー) からの呼び出し。
+    private func advance(forward: Bool, auto: Bool) {
+        slideshowTask?.cancel()
+        if auto && repeatMode == .one {
+            playerManager.restart()
+            return
+        }
+        guard let newIndex = targetIndex(forward: forward, auto: auto) else {
+            // これ以上送り先がない (リピートoff・末尾) → 再生終了
+            playerManager.player.pause()
+            return
+        }
+        goTo(index: newIndex)
+    }
+
+    private func targetIndex(forward: Bool, auto: Bool) -> Int? {
+        guard videos.count > 1 else {
+            return (auto && repeatMode == .all) ? currentIndex : nil
+        }
+        if isShuffle {
+            return videos.indices.filter { $0 != currentIndex }.randomElement()
+        }
+        if forward {
+            let n = currentIndex + 1
+            if n < videos.count { return n }
+            return repeatMode == .all ? 0 : nil
+        } else {
+            let p = currentIndex - 1
+            if p >= 0 { return p }
+            return repeatMode == .all ? videos.count - 1 : nil
+        }
+    }
+
+    private func goTo(index newIndex: Int) {
         guard newIndex >= 0 && newIndex < videos.count else { return }
-        
+
         let generator = UIImpactFeedbackGenerator(style: .medium)
         generator.impactOccurred()
-        
+
+        // 動画を切り替えたら画質はオリジナルへ戻す (自動送りで変換待ちが発生しないように)
+        prepareTask?.cancel()
+        isPreparingQuality = false
+        selectedQuality = "original"
+
         currentIndex = newIndex
         let newVideo = videos[newIndex]
         playingVideoID = newVideo.id
         PlaybackHistoryManager.shared.saveLastPlayed(id: newVideo.id)
-        
-        var components = URLComponents(string: "\(serverAddress)/video/\(newVideo.id)")
-        components?.queryItems = [URLQueryItem(name: "q", value: selectedQuality)]
-        if let newURL = components?.url {
-            playerManager.changeVideo(to: newURL)
+
+        if let newURL = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(newVideo.id)", query: [URLQueryItem(name: "q", value: selectedQuality)]) {
+            let startAt = isSlideshow ? randomStart(for: newVideo) : 0
+            playerManager.changeVideo(to: newURL, startAt: startAt)
         }
-        
+
+        showControls = true
+        startHideTimer()
+    }
+
+    /// スライドショーの再生開始位置をランダムに決める (クリップ長ぶんの余裕を残す)
+    private func randomStart(for video: RemoteVideoInfo) -> Double {
+        let maxStart = video.duration - slideshowClipDuration
+        guard maxStart > 1 else { return 0 }
+        return Double.random(in: 0...maxStart)
+    }
+
+    /// クリップ長ぶん再生したら次の動画へ送るタイマー
+    private func scheduleSlideshowAdvance() {
+        slideshowTask?.cancel()
+        let dur = slideshowClipDuration
+        slideshowTask = Task {
+            try? await Task.sleep(nanoseconds: UInt64(dur * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard isSlideshow else { return }
+                advance(forward: true, auto: true)
+            }
+        }
+    }
+
+    private func handlePlaybackEnded() {
+        if repeatMode == .one {
+            playerManager.restart()
+            return
+        }
+        if isSlideshow || isContinuous || isShuffle {
+            advance(forward: true, auto: true)
+        }
+    }
+
+    private func cycleRepeatMode() {
+        switch repeatMode {
+        case .off: repeatMode = .all
+        case .all: repeatMode = .one
+        case .one: repeatMode = .off
+        }
+    }
+
+    private func toggleSlideshow() {
+        isSlideshow.toggle()
+        if isSlideshow {
+            // スライドショー開始時はランダムな位置から再生し、送りタイマーを開始
+            playerManager.seek(toSeconds: randomStart(for: videos[currentIndex]))
+            playerManager.player.play()
+            scheduleSlideshowAdvance()
+        } else {
+            slideshowTask?.cancel()
+        }
+    }
+
+    private func toggleFavorite() {
+        favorites.toggle(videos[currentIndex].id)
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.impactOccurred()
         showControls = true
         startHideTimer()
     }
@@ -1022,7 +1327,7 @@ private struct RemotePhotoViewer: View {
     
     var body: some View { 
         let currentPhoto = photos[currentIndex]
-        let url = URL(string: "\(serverAddress)/video/\(currentPhoto.id)")!
+        let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(currentPhoto.id)") ?? URL(string: "\(serverAddress)/video/\(currentPhoto.id)")!
         
         ZStack { 
             Color.black.edgesIgnoringSafeArea(.all)
@@ -1134,8 +1439,8 @@ private struct VideoInfoSheetView: View {
     let video: RemoteVideoInfo; let serverAddress: String; @Environment(\.dismiss) var dismiss; var downloadManager: DownloadManager?
     private let bgGradient = LinearGradient(colors: [Color(red: 0.05, green: 0.05, blue: 0.08), Color(red: 0.1, green: 0.1, blue: 0.14)], startPoint: .top, endPoint: .bottom)
     private let accentColor = Color(red: 0.85, green: 0.73, blue: 0.45)
-    var body: some View { NavigationView { ScrollView { VStack(spacing: 24) { RemoteVideoThumbnailView(thumbnailURL: URL(string: "\(serverAddress)/thumbnail/\(video.id)")!, duration: video.duration).aspectRatio(16/9, contentMode: .fit).cornerRadius(20).overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.15), lineWidth: 1)).shadow(color: .black.opacity(0.5), radius: 15, x: 0, y: 10).padding(.horizontal, 20).padding(.top, 24); Button(action: startDownload) { HStack { Image(systemName: "square.and.arrow.down"); Text("写真アプリに保存").fontWeight(.bold) }.frame(maxWidth: .infinity).padding().background(LinearGradient(colors: [accentColor, accentColor.opacity(0.8)], startPoint: .leading, endPoint: .trailing)).foregroundColor(Color(red: 0.1, green: 0.1, blue: 0.1)).cornerRadius(16).shadow(color: accentColor.opacity(0.2), radius: 8, x: 0, y: 4) }.padding(.horizontal, 20); VStack(alignment: .leading, spacing: 16) { InfoRow(title: "ファイル名", value: video.filename, isMain: true); Divider().background(Color.white.opacity(0.2)); HStack { if !video.isPhoto { VStack(alignment: .leading) { Text("長さ").font(.caption).foregroundColor(.white.opacity(0.6)); Text(formatDuration(video.duration)).font(.subheadline.weight(.semibold)).foregroundColor(.white) }; Spacer() }; VStack(alignment: .leading) { Text("インポート日").font(.caption).foregroundColor(.white.opacity(0.6)); Text(video.importDate, style: .date).font(.subheadline.weight(.semibold)).foregroundColor(.white) }; if !video.isPhoto { Spacer() } }; if let creationDate = video.creationDate { Divider().background(Color.white.opacity(0.2)); VStack(alignment: .leading) { Text("撮影日時").font(.caption).foregroundColor(.white.opacity(0.6)); Text(creationDate, style: .date).font(.subheadline.weight(.semibold)).foregroundColor(.white) } }; Divider().background(Color.white.opacity(0.2)); InfoRow(title: "種類", value: video.isPhoto ? "画像" : "動画", isMain: false) }.padding(24).background(.ultraThinMaterial).cornerRadius(24).overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.1), lineWidth: 0.5)).padding(.horizontal, 20); Spacer(minLength: 40) } }.background(bgGradient.ignoresSafeArea()).navigationTitle("詳細情報").navigationBarTitleDisplayMode(.inline).toolbarColorScheme(.dark, for: .navigationBar).toolbarBackground(Color(red: 0.05, green: 0.05, blue: 0.08), for: .navigationBar).toolbarBackground(.visible, for: .navigationBar).toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("完了") { dismiss() }.font(.body.weight(.bold)).foregroundColor(accentColor) } } } } 
-    private func startDownload() { guard let url = URL(string: "\(serverAddress)/video/\(video.id)") else { return }; downloadManager?.startDownload(url: url, filename: video.filename, isPhoto: video.duration == 0); dismiss() }
+    var body: some View { NavigationView { ScrollView { VStack(spacing: 24) { RemoteVideoThumbnailView(thumbnailURL: ServerAuth.mediaURL(address: serverAddress, path: "/thumbnail/\(video.id)"), duration: video.duration).aspectRatio(16/9, contentMode: .fit).cornerRadius(20).overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.15), lineWidth: 1)).shadow(color: .black.opacity(0.5), radius: 15, x: 0, y: 10).padding(.horizontal, 20).padding(.top, 24); Button(action: startDownload) { HStack { Image(systemName: "square.and.arrow.down"); Text("写真アプリに保存").fontWeight(.bold) }.frame(maxWidth: .infinity).padding().background(LinearGradient(colors: [accentColor, accentColor.opacity(0.8)], startPoint: .leading, endPoint: .trailing)).foregroundColor(Color(red: 0.1, green: 0.1, blue: 0.1)).cornerRadius(16).shadow(color: accentColor.opacity(0.2), radius: 8, x: 0, y: 4) }.padding(.horizontal, 20); VStack(alignment: .leading, spacing: 16) { InfoRow(title: "ファイル名", value: video.filename, isMain: true); Divider().background(Color.white.opacity(0.2)); HStack { if !video.isPhoto { VStack(alignment: .leading) { Text("長さ").font(.caption).foregroundColor(.white.opacity(0.6)); Text(formatDuration(video.duration)).font(.subheadline.weight(.semibold)).foregroundColor(.white) }; Spacer() }; VStack(alignment: .leading) { Text("インポート日").font(.caption).foregroundColor(.white.opacity(0.6)); Text(video.importDate, style: .date).font(.subheadline.weight(.semibold)).foregroundColor(.white) }; if !video.isPhoto { Spacer() } }; if let creationDate = video.creationDate { Divider().background(Color.white.opacity(0.2)); VStack(alignment: .leading) { Text("撮影日時").font(.caption).foregroundColor(.white.opacity(0.6)); Text(creationDate, style: .date).font(.subheadline.weight(.semibold)).foregroundColor(.white) } }; Divider().background(Color.white.opacity(0.2)); InfoRow(title: "種類", value: video.isPhoto ? "画像" : "動画", isMain: false) }.padding(24).background(.ultraThinMaterial).cornerRadius(24).overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.1), lineWidth: 0.5)).padding(.horizontal, 20); Spacer(minLength: 40) } }.background(bgGradient.ignoresSafeArea()).navigationTitle("詳細情報").navigationBarTitleDisplayMode(.inline).toolbarColorScheme(.dark, for: .navigationBar).toolbarBackground(Color(red: 0.05, green: 0.05, blue: 0.08), for: .navigationBar).toolbarBackground(.visible, for: .navigationBar).toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("完了") { dismiss() }.font(.body.weight(.bold)).foregroundColor(accentColor) } } } } 
+    private func startDownload() { guard let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(video.id)") else { return }; downloadManager?.startDownload(url: url, filename: video.filename, isPhoto: video.duration == 0); dismiss() }
     private struct InfoRow: View { let title: String; let value: String; var isMain: Bool = false; var body: some View { VStack(alignment: .leading, spacing: 5) { Text(title).font(.caption).foregroundColor(.white.opacity(0.6)); Text(value).font(isMain ? .headline.weight(.bold) : .subheadline.weight(.semibold)).foregroundColor(.white) } } }
     private func formatDuration(_ totalSeconds: TimeInterval) -> String { let s = Int(totalSeconds); return String(format: "%d:%02d", s / 60, s % 60) } 
 }

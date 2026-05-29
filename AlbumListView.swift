@@ -9,7 +9,8 @@ struct AlbumListView: View {
     @EnvironmentObject var serverBrowser: ServerBrowser
     
     @StateObject private var serverManager = ServerManager()
-    
+    @ObservedObject private var favorites = FavoritesManager.shared
+
     @State private var newAlbumName = ""
     @State private var isShowingCreateAlbumAlert = false
     @State private var albumToDelete: String?
@@ -19,6 +20,13 @@ struct AlbumListView: View {
     @State private var newServerAlbumName = ""
     @State private var newServerAlbumType = "video"
     @State private var isUploadingAction = false
+
+    // ★ サーバーPIN入力
+    @State private var isShowingPINPrompt = false
+    @State private var pinInput = ""
+
+    // ★ サーバー停止
+    @State private var showShutdownConfirm = false
     
     // ★ リストとグリッドの表示切り替えフラグ
     @AppStorage("isAlbumListViewMode") private var isListViewMode = false
@@ -103,6 +111,27 @@ struct AlbumListView: View {
             } message: { album in
                 Text("「\(album)」を削除しますか？\nこの操作は取り消せません。")
             }
+            .alert("サーバーを停止しますか？", isPresented: $showShutdownConfirm) {
+                Button("キャンセル", role: .cancel) {}
+                Button("停止する", role: .destructive) {
+                    if let address = serverManager.server?.address {
+                        shutdownServer(serverAddress: address)
+                    }
+                }
+            } message: {
+                Text("Mac側のサーバーアプリを終了します。再起動するにはMacを直接操作する必要があります。")
+            }
+            .alert("サーバーPIN", isPresented: $isShowingPINPrompt) {
+                TextField("PIN", text: $pinInput)
+                    .keyboardType(.numberPad)
+                Button("接続") {
+                    serverManager.submitPIN(pinInput.trimmingCharacters(in: .whitespaces))
+                    pinInput = ""
+                }
+                Button("キャンセル", role: .cancel) { pinInput = "" }
+            } message: {
+                Text("Macのサーバー画面に表示されているPINを入力してください。")
+            }
             .onAppear {
                 videoManager.loadAlbums()
                 serverBrowser.startBrowsing()
@@ -149,9 +178,11 @@ struct AlbumListView: View {
     private var serverSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             if let server = serverManager.server, let address = server.address {
-                sectionHeader(title: server.name)
-                
-                if serverManager.isLoading {
+                serverSectionHeader(title: server.name)
+
+                if serverManager.authRequired {
+                    serverLockCard
+                } else if serverManager.isLoading {
                     ProgressView().tint(accentGlowColor).frame(maxWidth: .infinity, alignment: .center).padding()
                 } else if let errorMessage = serverManager.errorMessage {
                     Text(errorMessage).foregroundColor(.gray).font(.subheadline).padding()
@@ -162,6 +193,8 @@ struct AlbumListView: View {
                     
                     if isListViewMode {
                         LazyVStack(spacing: 12) {
+                            virtualListRow(title: "お気に入り", icon: "heart.fill", albumID: "FAVORITES", address: address, count: favorites.ids.count, tint: .pink)
+                            virtualListRow(title: "再生履歴", icon: "clock.arrow.circlepath", albumID: "HISTORY", address: address, count: nil, tint: accentGlowColor)
                             ForEach(libraryAlbums) { album in
                                 let isPhoto = album.name == "ALL PHOTOS"
                                 serverListRow(album: album, address: address, icon: isPhoto ? "photo.on.rectangle.fill" : "film.stack.fill")
@@ -175,6 +208,8 @@ struct AlbumListView: View {
                         }
                     } else {
                         LazyVGrid(columns: columns, spacing: 16) {
+                            virtualGridCell(title: "お気に入り", icon: "heart.fill", albumID: "FAVORITES", address: address, count: favorites.ids.count, tint: .pink)
+                            virtualGridCell(title: "再生履歴", icon: "clock.arrow.circlepath", albumID: "HISTORY", address: address, count: nil, tint: accentGlowColor)
                             ForEach(libraryAlbums) { album in
                                 let isPhoto = album.name == "ALL PHOTOS"
                                 serverGridCell(album: album, address: address, icon: isPhoto ? "photo.on.rectangle.fill" : "film.stack.fill")
@@ -204,6 +239,35 @@ struct AlbumListView: View {
         }
     }
     
+    // MARK: - サーバーロックカード (PIN認証要求時)
+    private var serverLockCard: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "lock.shield.fill")
+                .font(.system(size: 44, weight: .light))
+                .foregroundColor(accentGlowColor)
+            Text("このサーバーは保護されています")
+                .font(.subheadline.weight(.bold))
+                .foregroundColor(.white)
+            Text("接続するにはPINが必要です。")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.6))
+            Button(action: { isShowingPINPrompt = true }) {
+                Text("PINを入力")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundColor(primaryDarkColor)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .background(accentGlowColor)
+                    .cornerRadius(14)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(28)
+        .background(.ultraThinMaterial)
+        .cornerRadius(20)
+        .overlay(RoundedRectangle(cornerRadius: 20).stroke(accentGlowColor.opacity(0.3), lineWidth: 1))
+    }
+
     private func sectionHeader(title: String) -> some View {
         Text(title)
             .font(.title3.weight(.bold))
@@ -211,6 +275,24 @@ struct AlbumListView: View {
             .tracking(1.0)
             .padding(.bottom, 4)
             .padding(.leading, 4)
+    }
+
+    // ★ サーバー名 + 停止ボタンを表示するヘッダー
+    private func serverSectionHeader(title: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.title3.weight(.bold))
+                .foregroundColor(accentGlowColor)
+                .tracking(1.0)
+            Spacer()
+            Button(action: { showShutdownConfirm = true }) {
+                Image(systemName: "power.circle.fill")
+                    .font(.title2)
+                    .foregroundColor(.red.opacity(0.85))
+            }
+        }
+        .padding(.bottom, 4)
+        .padding(.horizontal, 4)
     }
     
     // MARK: - ローカル用コンポーネント
@@ -347,6 +429,76 @@ struct AlbumListView: View {
         }
     }
 
+    // MARK: - 仮想アルバム (お気に入り・再生履歴)
+    private func virtualGridCell(title: String, icon: String, albumID: String, address: String, count: Int?, tint: Color) -> some View {
+        NavigationLink(destination: RemoteVideoListView(serverName: title, serverAddress: address, albumID: albumID, allServerAlbums: serverManager.albums)) {
+            VStack(alignment: .leading, spacing: 10) {
+                ZStack {
+                    LinearGradient(colors: [tint.opacity(0.35), Color(red: 0.1, green: 0.1, blue: 0.14)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    Image(systemName: icon)
+                        .font(.system(size: 44, weight: .light))
+                        .foregroundColor(tint)
+                }
+                .aspectRatio(1, contentMode: .fill)
+                .frame(minWidth: 0, maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 20))
+                .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.1), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+
+                HStack {
+                    Text(title)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                    Spacer()
+                    if let count = count {
+                        Text("\(count)")
+                            .font(.caption2.weight(.bold))
+                            .foregroundColor(primaryDarkColor)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(tint)
+                            .cornerRadius(6)
+                    }
+                }
+                .padding(.horizontal, 4)
+            }
+        }
+    }
+
+    private func virtualListRow(title: String, icon: String, albumID: String, address: String, count: Int?, tint: Color) -> some View {
+        NavigationLink(destination: RemoteVideoListView(serverName: title, serverAddress: address, albumID: albumID, allServerAlbums: serverManager.albums)) {
+            HStack(spacing: 16) {
+                ZStack {
+                    LinearGradient(colors: [tint.opacity(0.35), Color(red: 0.1, green: 0.1, blue: 0.14)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    Image(systemName: icon).font(.system(size: 28, weight: .light)).foregroundColor(tint)
+                }
+                .frame(width: 72, height: 72)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 0.5))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundColor(.white)
+                    if let count = count {
+                        Text("\(count) 項目")
+                            .font(.caption.weight(.medium))
+                            .foregroundColor(tint.opacity(0.9))
+                    }
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundColor(Color.white.opacity(0.3))
+            }
+            .padding(12)
+            .background(.ultraThinMaterial)
+            .cornerRadius(20)
+            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+            .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
+        }
+    }
+
     // MARK: - Actions
     private func createAlbum() {
         if !newAlbumName.isEmpty {
@@ -368,6 +520,18 @@ struct AlbumListView: View {
         Task {
             _ = try? await ServerAPI.deleteAlbum(serverAddress: address, albumID: album.id)
             await serverManager.fetchAlbums(serverAddress: address)
+        }
+    }
+
+    // ★ サーバーを停止する (PIN認証対応)
+    private func shutdownServer(serverAddress: String) {
+        guard let url = URL(string: "\(serverAddress)/server/shutdown") else { return }
+        let req = ServerAuth.request(url, address: serverAddress, method: "POST")
+        Task {
+            _ = try? await URLSession.shared.data(for: req)
+            await MainActor.run {
+                serverBrowser.startBrowsing()
+            }
         }
     }
 }
@@ -426,7 +590,7 @@ struct ServerAlbumCoverView: View {
                 Color(red: 0.1, green: 0.1, blue: 0.14).ignoresSafeArea()
                 
                 if let vid = coverVideoID {
-                    AsyncImage(url: URL(string: "\(serverAddress)/thumbnail/\(vid)")) { phase in
+                    AsyncImage(url: ServerAuth.mediaURL(address: serverAddress, path: "/thumbnail/\(vid)")) { phase in
                         switch phase {
                         case .success(let image):
                             image.resizable().aspectRatio(contentMode: .fill)
@@ -459,7 +623,7 @@ struct ServerAlbumCoverView: View {
     private func fetchCoverID() async {
         guard let url = URL(string: "\(serverAddress)/albums/\(albumID)/videos") else { return }
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, _) = try await URLSession.shared.data(for: ServerAuth.request(url, address: serverAddress))
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let videos = try decoder.decode([RemoteVideoInfo].self, from: data)

@@ -16,6 +16,7 @@ struct RemoteVideoListView: View {
     let serverAddress: String
     let albumID: String
     let allServerAlbums: [RemoteAlbumInfo]
+    var initialVideoToPlay: RemoteVideoInfo? = nil
     
     @State private var videos: [RemoteVideoInfo] = []
     @State private var isLoading = true
@@ -24,6 +25,7 @@ struct RemoteVideoListView: View {
     
     @State private var videoToPlay: RemoteVideoInfo?
     @State private var playingVideoID: String?
+    @State private var isPlayerMinimized: Bool = false
     @State private var photoToView: RemoteVideoInfo?
     @State private var videoForInfoSheet: RemoteVideoInfo?
     
@@ -111,7 +113,9 @@ struct RemoteVideoListView: View {
                 else if videos.isEmpty { placeholderView(icon: albumID == "FAVORITES" ? "heart.slash" : "server.rack", title: "メディアがありません", message: emptyMessage) }
                 else {
                     GeometryReader { geo in
-                        if isListViewMode {
+                        if albumID == "SHORTS" {
+                            RemoteShortsPlayerView(videos: sortedAndFilteredVideos, serverAddress: serverAddress, allServerAlbums: allServerAlbums)
+                        } else if isListViewMode {
                             videoList
                         } else {
                             videoGrid(width: geo.size.width)
@@ -238,13 +242,42 @@ struct RemoteVideoListView: View {
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+            
+            if let video = videoToPlay {
+                let onlyVideos = sortedAndFilteredVideos.filter { !$0.isPhoto }
+                if let initialIndex = onlyVideos.firstIndex(where: { $0.id == video.id }) {
+                    DraggablePlayerView(
+                        videos: onlyVideos,
+                        initialIndex: initialIndex,
+                        serverAddress: serverAddress,
+                        videoToPlay: $videoToPlay,
+                        playingVideoID: $playingVideoID,
+                        isMinimized: $isPlayerMinimized
+                    )
+                    .onAppear { if let id = playingVideoID { lastPlayedID = id } }
+                    .onDisappear { lastPlayedID = PlaybackHistoryManager.shared.getLastPlayedID() }
+                    .zIndex(100)
+                } else {
+                    DraggablePlayerView(
+                        videos: [video],
+                        initialIndex: 0,
+                        serverAddress: serverAddress,
+                        videoToPlay: $videoToPlay,
+                        playingVideoID: $playingVideoID,
+                        isMinimized: $isPlayerMinimized
+                    )
+                    .onAppear { if let id = playingVideoID { lastPlayedID = id } }
+                    .onDisappear { lastPlayedID = PlaybackHistoryManager.shared.getLastPlayedID() }
+                    .zIndex(100)
+                }
+            }
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isSelectionMode)
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "検索")
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbarBackground(Color.appDarkBackground, for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbar((videoToPlay != nil && !isPlayerMinimized) || albumID == "SHORTS" ? .hidden : .visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Text(isSelectionMode ? "\(selectedVideoIDs.count)件選択" : serverName)
@@ -301,30 +334,6 @@ struct RemoteVideoListView: View {
         } message: {
             Text("アップロードしたメディアを元のアプリから削除しますか？\n（写真アプリの場合はOSの削除確認が表示されます）")
         }
-        .fullScreenCover(item: $videoToPlay) { video in
-            let onlyVideos = sortedAndFilteredVideos.filter { !$0.isPhoto }
-            if let initialIndex = onlyVideos.firstIndex(where: { $0.id == video.id }) {
-                DraggablePlayerView(
-                    videos: onlyVideos,
-                    initialIndex: initialIndex,
-                    serverAddress: serverAddress,
-                    videoToPlay: $videoToPlay,
-                    playingVideoID: $playingVideoID
-                )
-                .onAppear { if let id = playingVideoID { lastPlayedID = id } }
-                .onDisappear { lastPlayedID = PlaybackHistoryManager.shared.getLastPlayedID() }
-            } else {
-                DraggablePlayerView(
-                    videos: [video],
-                    initialIndex: 0,
-                    serverAddress: serverAddress,
-                    videoToPlay: $videoToPlay,
-                    playingVideoID: $playingVideoID
-                )
-                .onAppear { if let id = playingVideoID { lastPlayedID = id } }
-                .onDisappear { lastPlayedID = PlaybackHistoryManager.shared.getLastPlayedID() }
-            }
-        }
         .fullScreenCover(item: $photoToView) { photo in
             let onlyPhotos = sortedAndFilteredVideos.filter { $0.isPhoto }
             if let initialIndex = onlyPhotos.firstIndex(where: { $0.id == photo.id }) {
@@ -353,6 +362,10 @@ struct RemoteVideoListView: View {
         }
         .sheet(item: $videoForInfoSheet) { video in VideoInfoSheetView(video: video, serverAddress: serverAddress, downloadManager: downloadManager) }
         .task { 
+            if let initial = initialVideoToPlay {
+                videoToPlay = initial
+                playingVideoID = initial.id
+            }
             if videos.isEmpty { await fetchVideosFromServer() }
             lastPlayedID = PlaybackHistoryManager.shared.getLastPlayedID()
         }
@@ -575,7 +588,7 @@ struct RemoteVideoListView: View {
     }
     
     // MARK: - API Calls
-    private var isVirtualAlbum: Bool { albumID == "HISTORY" || albumID == "FAVORITES" }
+    private var isVirtualAlbum: Bool { albumID == "HISTORY" || albumID == "FAVORITES" || albumID == "SHORTS" }
 
     private func fetchAllMedia() async throws -> [RemoteVideoInfo] {
         let libraryAlbums = allServerAlbums.filter { $0.name == "ALL VIDEOS" || $0.name == "ALL PHOTOS" }
@@ -615,6 +628,12 @@ struct RemoteVideoListView: View {
                 self.videos = allMedia.filter { favIDs.contains($0.id) }
             } catch {
                 errorMessage = "お気に入り取得失敗: \(error.localizedDescription)"
+            }
+        } else if albumID == "SHORTS" {
+            do {
+                self.videos = try await fetchAllMedia()
+            } catch {
+                errorMessage = "ショート取得失敗: \(error.localizedDescription)"
             }
         } else {
             guard let url = URL(string: "\(serverAddress)/albums/\(albumID)/videos") else { return }
@@ -945,6 +964,7 @@ private struct DraggablePlayerView: View {
 
     @Binding var videoToPlay: RemoteVideoInfo?
     @Binding var playingVideoID: String?
+    @Binding var isMinimized: Bool
 
     @State private var currentIndex: Int
     @StateObject private var playerManager: PlayerManager
@@ -980,12 +1000,13 @@ private struct DraggablePlayerView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     private let accentGlowColor = Color.appGold
 
-    init(videos: [RemoteVideoInfo], initialIndex: Int, serverAddress: String, videoToPlay: Binding<RemoteVideoInfo?>, playingVideoID: Binding<String?>) {
+    init(videos: [RemoteVideoInfo], initialIndex: Int, serverAddress: String, videoToPlay: Binding<RemoteVideoInfo?>, playingVideoID: Binding<String?>, isMinimized: Binding<Bool>) {
         self.videos = videos
         self._currentIndex = State(initialValue: initialIndex)
         self.serverAddress = serverAddress
         self._videoToPlay = videoToPlay
         self._playingVideoID = playingVideoID
+        self._isMinimized = isMinimized
         
         let initialVideo = videos[initialIndex]
         let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(initialVideo.id)") ?? URL(string: "\(serverAddress)/video/\(initialVideo.id)")!
@@ -995,17 +1016,20 @@ private struct DraggablePlayerView: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                // 縦向きは YouTube 風（上で再生・下で一覧）、横向きは従来通り全画面
-                if geo.size.width <= geo.size.height {
-                    portraitBody(width: geo.size.width, topInset: geo.safeAreaInsets.top)
+                if isMinimized {
+                    miniPlayerBody(width: geo.size.width, height: geo.size.height)
                 } else {
-                    landscapeBody
+                    if geo.size.width <= geo.size.height {
+                        portraitBody(width: geo.size.width, topInset: geo.safeAreaInsets.top)
+                    } else {
+                        landscapeBody
+                    }
+                    keyboardShortcutButtons
                 }
-                keyboardShortcutButtons
             }
         }
         .ignoresSafeArea()
-        .background(Color.black.ignoresSafeArea())
+        .background((isMinimized ? Color.clear : Color.black).ignoresSafeArea())
         .onAppear {
             startHideTimer()
             playerManager.onEnded = { handlePlaybackEnded() }
@@ -1152,8 +1176,13 @@ private struct DraggablePlayerView: View {
 
     private func portraitBody(width: CGFloat, topInset: CGFloat) -> some View {
         let videoHeight = width * 9.0 / 16.0
-        // ダイナミックアイランドとの重なりを回避するため topInset に追加余白を加える
-        let safeTop = topInset + 8
+        // GeometryReader が ignoresSafeArea() されているため topInset は 0 になる。
+        // UIApplication から実際のセーフエリアを取得し、ダイナミックアイランドとの重なりを避ける。
+        let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene
+        let window = windowScene?.windows.first { $0.isKeyWindow } ?? windowScene?.windows.first
+        let actualTopInset = window?.safeAreaInsets.top ?? 47
+        let safeTop = actualTopInset > 0 ? actualTopInset : 47
+        
         return VStack(spacing: 0) {
             // ダイナミックアイランド裏の黒帯
             Color.black
@@ -1191,8 +1220,10 @@ private struct DraggablePlayerView: View {
                         let w = dragOffset.width
                         let h = dragOffset.height
                         if h > 90 && abs(h) > abs(w) {
-                            playerManager.shutdown()
-                            videoToPlay = nil
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                                isMinimized = true
+                                dragOffset = .zero
+                            }
                         } else if abs(w) > 90 && abs(w) > abs(h) {
                             changeVideo(offset: w < 0 ? 1 : -1)
                             withAnimation(.spring()) { dragOffset = .zero }
@@ -1207,6 +1238,56 @@ private struct DraggablePlayerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.appDarkBackground.ignoresSafeArea())
+    }
+
+    // MARK: - Mini Player
+    private func miniPlayerBody(width: CGFloat, height: CGFloat) -> some View {
+        let miniWidth: CGFloat = 160
+        let miniHeight = miniWidth * 9.0 / 16.0
+        
+        return ZStack {
+            Color.black
+            PlayerLayerView(player: playerManager.player)
+                .allowsHitTesting(false)
+            
+            // Close button overlay
+            VStack {
+                HStack {
+                    Spacer()
+                    Button(action: {
+                        playerManager.shutdown()
+                        videoToPlay = nil
+                    }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(6)
+                            .background(Color.black.opacity(0.4).clipShape(Circle()))
+                    }
+                    .padding(4)
+                }
+                Spacer()
+            }
+        }
+        .frame(width: miniWidth, height: miniHeight)
+        .cornerRadius(8)
+        .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
+        // Position at bottom-right, keeping safe area in mind
+        .position(x: width - miniWidth/2 - 16, y: height - miniHeight/2 - 100)
+        .onTapGesture {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                isMinimized = false
+            }
+        }
+        .gesture(
+            DragGesture()
+                .onEnded { value in
+                    if value.translation.width > 50 || value.translation.height > 50 || value.translation.width < -50 {
+                        playerManager.shutdown()
+                        withAnimation { videoToPlay = nil }
+                    }
+                }
+        )
     }
 
     /// iPad 等の幅広端末ではグリッド、iPhone 等ではリスト表示で「次の動画」を表示
@@ -2115,7 +2196,8 @@ private struct RemotePhotoViewer: View {
     }
 }
 
-private struct VideoInfoSheetView: View {
+// MARK: - Information Sheet
+struct VideoInfoSheetView: View {
     let video: RemoteVideoInfo
     let serverAddress: String
     @Environment(\.dismiss) var dismiss
@@ -2127,6 +2209,12 @@ private struct VideoInfoSheetView: View {
         endPoint: .bottom
     )
     private let accentColor = Color.appGold
+
+    init(video: RemoteVideoInfo, serverAddress: String, downloadManager: DownloadManager? = nil) {
+        self.video = video
+        self.serverAddress = serverAddress
+        self.downloadManager = downloadManager
+    }
 
     var body: some View {
         NavigationView {

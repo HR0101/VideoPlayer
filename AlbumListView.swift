@@ -207,6 +207,7 @@ struct AlbumListView: View {
                         LazyVStack(spacing: 12) {
                             virtualListRow(title: "お気に入り", icon: "heart.fill", albumID: "FAVORITES", address: address, count: favorites.ids.count, tint: .pink)
                             virtualListRow(title: "再生履歴", icon: "clock.arrow.circlepath", albumID: "HISTORY", address: address, count: nil, tint: .appGold)
+                            virtualListRow(title: "ショート動画", icon: "flame.fill", albumID: "SHORTS", address: address, count: nil, tint: .cyan)
                             ForEach(libraryAlbums) { album in
                                 let isPhoto = album.name == "ALL PHOTOS"
                                 serverListRow(album: album, address: address, icon: isPhoto ? "photo.on.rectangle.fill" : "film.stack.fill")
@@ -222,6 +223,7 @@ struct AlbumListView: View {
                         LazyVGrid(columns: albumColumns(for: width), spacing: 16) {
                             virtualGridCell(title: "お気に入り", icon: "heart.fill", albumID: "FAVORITES", address: address, count: favorites.ids.count, tint: .pink)
                             virtualGridCell(title: "再生履歴", icon: "clock.arrow.circlepath", albumID: "HISTORY", address: address, count: nil, tint: .appGold)
+                            virtualGridCell(title: "ショート", icon: "flame.fill", albumID: "SHORTS", address: address, count: nil, tint: .cyan)
                             ForEach(libraryAlbums) { album in
                                 let isPhoto = album.name == "ALL PHOTOS"
                                 serverGridCell(album: album, address: address, icon: isPhoto ? "photo.on.rectangle.fill" : "film.stack.fill")

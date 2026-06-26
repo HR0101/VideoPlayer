@@ -253,11 +253,18 @@ final class RemoteShortsModel: ObservableObject {
     @Published var currentVideo: RemoteVideoInfo?
     @Published var isLoading = false
     @Published var isPlaying = true
+    @Published var progress: Double = 0.0
+    @Published var isScrubbing = false
 
     private var shuffledVideos: [RemoteVideoInfo] = []
     private var index = 0
     let serverAddress: String
-    private let clipDuration: Double = 60 // 1分
+    let clipDuration: Double = 60 // 1分
+    @Published private(set) var clipStartTime: Double = 0
+    private var timeObserverToken: Any?
+    
+    private var nextPlayer: AVPlayer?
+    private var nextClipStartTime: Double = 0
     
     private var advanceTask: Task<Void, Never>?
     private var endObserver: NSObjectProtocol?
@@ -274,6 +281,31 @@ final class RemoteShortsModel: ObservableObject {
             guard let self else { return }
             DispatchQueue.main.async { self.next() }
         }
+        
+        setupTimeObserver()
+    }
+    
+    private func setupTimeObserver() {
+        // Assumes timeObserverToken is already nil. Do not remove here.
+        timeObserverToken = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main) { [weak self] time in
+            guard let self = self, !self.isScrubbing else { return }
+            let elapsed = time.seconds - self.clipStartTime
+            self.progress = max(0, min(1, elapsed / self.clipDuration))
+        }
+    }
+
+    func shutdown() {
+        if let token = timeObserverToken {
+            player.removeTimeObserver(token)
+            timeObserverToken = nil
+        }
+        if let endObserver = endObserver {
+            NotificationCenter.default.removeObserver(endObserver)
+            self.endObserver = nil
+        }
+        player.pause()
+        nextPlayer?.pause()
+        advanceTask?.cancel()
     }
 
     func start() {
@@ -300,10 +332,33 @@ final class RemoteShortsModel: ObservableObject {
         guard let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(v.id)") else { return }
 
         isLoading = true
-        let item = AVPlayerItem(url: url)
-        player.replaceCurrentItem(with: item)
+        let startTarget: Double
+        let oldPlayer = self.player
+        
+        if let nextP = nextPlayer, (nextP.currentItem?.asset as? AVURLAsset)?.url == url {
+            self.player = nextP
+            startTarget = nextClipStartTime
+            self.nextPlayer = nil
+        } else {
+            self.player = AVPlayer(url: url)
+            let dur = v.duration
+            startTarget = dur > self.clipDuration ? Double.random(in: 0...(dur - self.clipDuration)) : 0
+        }
+        
+        if oldPlayer !== self.player {
+            if let token = timeObserverToken {
+                oldPlayer.removeTimeObserver(token)
+                timeObserverToken = nil
+            }
+            oldPlayer.pause()
+            oldPlayer.replaceCurrentItem(with: nil)
+            setupTimeObserver()
+        }
+        
+        self.clipStartTime = startTarget
+        guard let item = self.player.currentItem else { return }
 
-        statusObserver = item.observe(\.status, options: [.new]) { [weak self] observedItem, _ in
+        statusObserver = item.observe(\.status, options: [.initial, .new]) { [weak self] observedItem, _ in
             guard let self else { return }
             DispatchQueue.main.async {
                 guard observedItem.status == .readyToPlay else {
@@ -325,18 +380,36 @@ final class RemoteShortsModel: ObservableObject {
                     }
                     return
                 }
+                
+                // If the player replaced the item before this callback fired for the OLD item, ignore it
+                if self.player.currentItem != observedItem { return }
+
                 self.clipRetry = 0
                 self.isLoading = false
                 
-                let dur = v.duration
-                let start = dur > self.clipDuration ? Double.random(in: 0...(dur - self.clipDuration)) : 0
-                self.player.seek(to: CMTime(seconds: start, preferredTimescale: 600)) { _ in
+                self.player.seek(to: CMTime(seconds: self.clipStartTime, preferredTimescale: 600)) { _ in
                     DispatchQueue.main.async {
-                        self.player.play()
-                        self.isPlaying = true
-                        self.scheduleAdvance()
+                        if self.player.currentItem == observedItem {
+                            self.player.play()
+                            self.isPlaying = true
+                            self.scheduleAdvance()
+                        }
                     }
                 }
+            }
+        }
+        
+        // --- Preload next video ---
+        let nextIndex = (index + 1) % shuffledVideos.count
+        if nextIndex < shuffledVideos.count && nextIndex != index {
+            let nextV = shuffledVideos[nextIndex]
+            if let nextUrl = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(nextV.id)") {
+                let nPlayer = AVPlayer(url: nextUrl)
+                self.nextPlayer = nPlayer
+                
+                let nextDur = nextV.duration
+                self.nextClipStartTime = nextDur > self.clipDuration ? Double.random(in: 0...(nextDur - self.clipDuration)) : 0
+                nPlayer.seek(to: CMTime(seconds: self.nextClipStartTime, preferredTimescale: 600))
             }
         }
     }
@@ -355,15 +428,38 @@ final class RemoteShortsModel: ObservableObject {
         playClip()
     }
     
+    func previous() {
+        index -= 1
+        if index < 0 {
+            index = max(0, shuffledVideos.count - 1)
+        }
+        playClip()
+    }
+    
     func togglePlay() {
         if isPlaying {
-            player.pause()
-            advanceTask?.cancel()
+            pause()
         } else {
             player.play()
             scheduleAdvance()
+            isPlaying = true
         }
-        isPlaying.toggle()
+    }
+    
+    func pause() {
+        if isPlaying {
+            player.pause()
+            advanceTask?.cancel()
+            isPlaying = false
+        }
+    }
+    
+    func seek(to percent: Double) {
+        progress = percent
+        let targetSeconds = clipStartTime + (clipDuration * percent)
+        player.seek(to: CMTime(seconds: targetSeconds, preferredTimescale: 600)) { [weak self] _ in
+            self?.scheduleAdvance()
+        }
     }
 }
 
@@ -372,6 +468,7 @@ struct RemoteShortsPlayerView: View {
     @Environment(\.dismiss) private var dismiss
     
     @ObservedObject private var favorites = FavoritesManager.shared
+    @ObservedObject private var shortsFavorites = ShortsFavoritesManager.shared
     @State private var showInfoSheet = false
     @State private var jumpToFullVideo: RemoteVideoInfo? = nil
     
@@ -448,12 +545,23 @@ struct RemoteShortsPlayerView: View {
                                 // Like Button
                                 Button(action: {
                                     Haptics.light()
-                                    favorites.toggle(v.id)
+                                    let isShortsFav = shortsFavorites.isFavorite(videoID: v.id, startTime: model.clipStartTime)
+                                    if isShortsFav {
+                                        if let clipId = shortsFavorites.getClipId(videoID: v.id, startTime: model.clipStartTime) {
+                                            shortsFavorites.removeClip(id: clipId)
+                                        }
+                                    } else {
+                                        shortsFavorites.addClip(videoID: v.id, startTime: model.clipStartTime, endTime: model.clipStartTime + model.clipDuration)
+                                        if !favorites.isFavorite(v.id) {
+                                            favorites.toggle(v.id)
+                                        }
+                                    }
                                 }) {
                                     VStack(spacing: 4) {
-                                        Image(systemName: favorites.isFavorite(v.id) ? "heart.fill" : "heart")
+                                        let isFav = shortsFavorites.isFavorite(videoID: v.id, startTime: model.clipStartTime)
+                                        Image(systemName: isFav ? "heart.fill" : "heart")
                                             .font(.title)
-                                            .foregroundColor(favorites.isFavorite(v.id) ? .pink : .white)
+                                            .foregroundColor(isFav ? .pink : .white)
                                             .shadow(radius: 2)
                                         Text("いいね")
                                             .font(.caption2)
@@ -464,7 +572,7 @@ struct RemoteShortsPlayerView: View {
                                 
                                 // Jump to Full Video
                                 Button(action: {
-                                    model.player.pause()
+                                    model.pause()
                                     jumpToFullVideo = v
                                 }) {
                                     VStack(spacing: 4) {
@@ -481,7 +589,7 @@ struct RemoteShortsPlayerView: View {
                                 
                                 // Info Button
                                 Button(action: {
-                                    model.player.pause()
+                                    model.pause()
                                     showInfoSheet = true
                                 }) {
                                     VStack(spacing: 4) {
@@ -499,7 +607,42 @@ struct RemoteShortsPlayerView: View {
                         }
                     }
                     .padding(.horizontal, 20)
-                    .padding(.bottom, 40)
+                    .padding(.bottom, 14)
+                    
+
+                    // Seek Bar
+                    GeometryReader { geo in
+                        VStack(spacing: 0) {
+                            Spacer()
+                            Rectangle()
+                                .fill(Color.white.opacity(0.3))
+                                .frame(height: 6)
+                                .overlay(
+                                    Rectangle()
+                                        .fill(Color.white)
+                                        .frame(width: geo.size.width * CGFloat(model.progress), height: 6),
+                                    alignment: .leading
+                                )
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                        .highPriorityGesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    model.isScrubbing = true
+                                    let percent = max(0, min(1, value.location.x / geo.size.width))
+                                    model.progress = percent
+                                }
+                                .onEnded { value in
+                                    let percent = max(0, min(1, value.location.x / geo.size.width))
+                                    model.seek(to: percent)
+                                    model.isScrubbing = false
+                                }
+                        )
+                    }
+                    .frame(height: 44)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 10)
                 }
             }
         }
@@ -511,8 +654,8 @@ struct RemoteShortsPlayerView: View {
                         // Swipe up -> next
                         model.next()
                     } else if value.translation.height > 50 {
-                        // Swipe down -> dismiss
-                        dismiss()
+                        // Swipe down -> previous
+                        model.previous()
                     }
                 }
         )
@@ -520,17 +663,389 @@ struct RemoteShortsPlayerView: View {
             model.start()
         }
         .onDisappear {
-            model.player.pause()
+            model.shutdown()
         }
         // Sheet for details
-        .sheet(isPresented: $showInfoSheet, onDismiss: { model.player.play() }) {
+        .sheet(isPresented: $showInfoSheet, onDismiss: { if !model.isPlaying { model.togglePlay() } }) {
             if let v = model.currentVideo {
                 VideoInfoSheetView(video: v, serverAddress: model.serverAddress, downloadManager: DownloadManager())
             }
         }
         // Fullscreen for jump to original
-        .fullScreenCover(item: $jumpToFullVideo, onDismiss: { model.player.play() }) { v in
-            RemoteVideoListView(serverName: "動画", serverAddress: model.serverAddress, albumID: "ALL VIDEOS", allServerAlbums: allServerAlbums, initialVideoToPlay: v)
+        .fullScreenCover(item: $jumpToFullVideo, onDismiss: { if !model.isPlaying { model.togglePlay() } }) { v in
+            NavigationStack {
+                RemoteVideoListView(
+                    serverName: allServerAlbums.first(where: { $0.id == v.parentAlbumID })?.name ?? "動画",
+                    serverAddress: model.serverAddress,
+                    albumID: v.parentAlbumID ?? "ALL VIDEOS",
+                    allServerAlbums: allServerAlbums,
+                    initialVideoToPlay: v,
+                    isPresentedFromShorts: true
+                )
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("閉じる") {
+                            jumpToFullVideo = nil
+                        }
+                        .foregroundColor(.appGold)
+                    }
+                }
+            }
+            .presentationBackground(.clear)
         }
+    }
+}
+
+// MARK: - お気に入りショート用プレイヤーモデル
+@MainActor
+final class RemoteShortsFavoritesModel: ObservableObject {
+    @Published var player = AVPlayer()
+    @Published var currentVideo: RemoteVideoInfo?
+    @Published var isLoading = false
+    @Published var isPlaying = true
+    @Published var progress: Double = 0.0
+
+    private var clips: [ShortsFavoriteClip] = []
+    private var allVideos: [RemoteVideoInfo] = []
+    private var index = 0
+    let serverAddress: String
+    
+    @Published private(set) var clipDuration: Double = 0
+    @Published private(set) var clipStartTime: Double = 0
+    private var timeObserverToken: Any?
+    
+    private var nextPlayer: AVPlayer?
+    private var advanceTask: Task<Void, Never>?
+    private var endObserver: NSObjectProtocol?
+    private var statusObserver: NSKeyValueObservation?
+
+    init(videos: [RemoteVideoInfo], serverAddress: String, initialIndex: Int = 0) {
+        self.allVideos = videos
+        self.serverAddress = serverAddress
+        self.clips = ShortsFavoritesManager.shared.clips
+        self.index = min(max(0, initialIndex), max(0, clips.count - 1))
+        
+        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            DispatchQueue.main.async { self.next() }
+        }
+        
+        setupTimeObserver()
+    }
+    
+    private func setupTimeObserver() {
+        timeObserverToken = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main) { [weak self] time in
+            guard let self = self else { return }
+            let elapsed = time.seconds - self.clipStartTime
+            if self.clipDuration > 0 {
+                self.progress = max(0, min(1, elapsed / self.clipDuration))
+            }
+        }
+    }
+
+    func shutdown() {
+        if let token = timeObserverToken {
+            player.removeTimeObserver(token)
+            timeObserverToken = nil
+        }
+        if let endObserver = endObserver {
+            NotificationCenter.default.removeObserver(endObserver)
+            self.endObserver = nil
+        }
+        player.pause()
+        nextPlayer?.pause()
+        advanceTask?.cancel()
+    }
+
+    func start() {
+        if clips.isEmpty { return }
+        playClip()
+    }
+
+    func playClip() {
+        advanceTask?.cancel()
+        statusObserver?.invalidate()
+        statusObserver = nil
+        
+        if clips.isEmpty { return }
+        
+        if index >= clips.count {
+            index = 0
+        }
+        
+        let clip = clips[index]
+        guard let v = allVideos.first(where: { $0.id == clip.videoID }) else {
+            clips.remove(at: index)
+            playClip()
+            return
+        }
+        
+        currentVideo = v
+        guard let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(v.id)") else { return }
+
+        isLoading = true
+        let oldPlayer = self.player
+        
+        self.player = AVPlayer(url: url)
+        self.clipStartTime = clip.startTime
+        self.clipDuration = clip.endTime - clip.startTime
+        
+        if oldPlayer !== self.player {
+            if let token = timeObserverToken {
+                oldPlayer.removeTimeObserver(token)
+                timeObserverToken = nil
+            }
+            oldPlayer.pause()
+            oldPlayer.replaceCurrentItem(with: nil)
+            setupTimeObserver()
+        }
+        
+        guard let item = self.player.currentItem else { return }
+
+        statusObserver = item.observe(\.status, options: [.initial, .new]) { [weak self] observedItem, _ in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                guard observedItem.status == .readyToPlay else {
+                    if observedItem.status == .failed {
+                        self.isLoading = false
+                        self.advanceTask = Task {
+                            try? await Task.sleep(nanoseconds: 500_000_000)
+                            if !Task.isCancelled { await MainActor.run { self.next() } }
+                        }
+                    }
+                    return
+                }
+                
+                if self.player.currentItem != observedItem { return }
+
+                self.isLoading = false
+                
+                self.player.seek(to: CMTime(seconds: self.clipStartTime, preferredTimescale: 600)) { _ in
+                    DispatchQueue.main.async {
+                        if self.player.currentItem == observedItem {
+                            self.player.play()
+                            self.isPlaying = true
+                            self.scheduleAdvance()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func scheduleAdvance() {
+        advanceTask?.cancel()
+        advanceTask = Task { [weak self] in
+            guard let self = self else { return }
+            try? await Task.sleep(nanoseconds: UInt64(self.clipDuration * 1_000_000_000))
+            if Task.isCancelled { return }
+            await MainActor.run { self.next() }
+        }
+    }
+
+    func next() {
+        index += 1
+        playClip()
+    }
+    
+    func previous() {
+        index -= 1
+        if index < 0 {
+            index = max(0, clips.count - 1)
+        }
+        playClip()
+    }
+    
+    func togglePlay() {
+        if isPlaying {
+            pause()
+        } else {
+            player.play()
+            scheduleAdvance()
+            isPlaying = true
+        }
+    }
+    
+    func pause() {
+        if isPlaying {
+            player.pause()
+            advanceTask?.cancel()
+            isPlaying = false
+        }
+    }
+    
+    func seek(to percent: Double) {
+        let targetSec = clipStartTime + (clipDuration * percent)
+        player.seek(to: CMTime(seconds: targetSec, preferredTimescale: 600))
+    }
+}
+
+// MARK: - お気に入りショート用プレイヤービュー
+struct RemoteShortsFavoritesPlayerView: View {
+    @StateObject private var model: RemoteShortsFavoritesModel
+    @Environment(\.dismiss) private var dismiss
+    
+    @ObservedObject private var favorites = FavoritesManager.shared
+    @ObservedObject private var shortsFavorites = ShortsFavoritesManager.shared
+    @State private var showInfoSheet = false
+    @State private var jumpToFullVideo: RemoteVideoInfo? = nil
+    
+    let allServerAlbums: [RemoteAlbumInfo]
+
+    init(videos: [RemoteVideoInfo], serverAddress: String, allServerAlbums: [RemoteAlbumInfo], initialIndex: Int = 0) {
+        _model = StateObject(wrappedValue: RemoteShortsFavoritesModel(videos: videos, serverAddress: serverAddress, initialIndex: initialIndex))
+        self.allServerAlbums = allServerAlbums
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            if model.currentVideo == nil {
+                if shortsFavorites.clips.isEmpty {
+                    VStack(spacing: 20) {
+                        Image(systemName: "heart.slash")
+                            .font(.system(size: 64))
+                            .foregroundColor(.white.opacity(0.3))
+                        Text("お気に入りショートはありません")
+                            .font(.title3.weight(.medium))
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                } else {
+                    ProgressView().tint(.white)
+                }
+            } else {
+                // Video Layer
+                PlayerLayerView(player: model.player)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        model.togglePlay()
+                    }
+                
+                if model.isLoading {
+                    ProgressView().tint(.white).scaleEffect(1.5)
+                }
+                
+                if !model.isPlaying {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 60))
+                        .foregroundColor(.white.opacity(0.8))
+                        .allowsHitTesting(false)
+                }
+
+                // Overlay Controls
+                VStack {
+                    HStack {
+                        Button(action: { dismiss() }) {
+                            Image(systemName: "chevron.down")
+                                .font(.title3.weight(.bold))
+                                .foregroundColor(.white)
+                                .padding(12)
+                                .background(Color.black.opacity(0.4).clipShape(Circle()))
+                        }
+                        Spacer()
+                    }
+                    .padding(.top, 50)
+                    .padding(.horizontal, 20)
+
+                    Spacer()
+
+                    HStack(alignment: .bottom) {
+                        // Left: Info
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let v = model.currentVideo {
+                                Text(v.filename)
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                    .lineLimit(2)
+                                    .shadow(radius: 2)
+                            }
+                        }
+                        
+                        Spacer()
+                        
+                        // Right: Actions
+                        VStack(spacing: 24) {
+                            if let v = model.currentVideo {
+                                // Like Button
+                                Button(action: {
+                                    Haptics.light()
+                                    let isShortsFav = shortsFavorites.isFavorite(videoID: v.id, startTime: model.clipStartTime)
+                                    if isShortsFav {
+                                        if let clipId = shortsFavorites.getClipId(videoID: v.id, startTime: model.clipStartTime) {
+                                            shortsFavorites.removeClip(id: clipId)
+                                            if shortsFavorites.clips.isEmpty {
+                                                dismiss()
+                                            }
+                                        }
+                                    }
+                                }) {
+                                    VStack(spacing: 4) {
+                                        let isFav = shortsFavorites.isFavorite(videoID: v.id, startTime: model.clipStartTime)
+                                        Image(systemName: isFav ? "heart.fill" : "heart")
+                                            .font(.title)
+                                            .foregroundColor(isFav ? .pink : .white)
+                                            .shadow(radius: 2)
+                                        Text("いいね")
+                                            .font(.caption2)
+                                            .foregroundColor(.white)
+                                            .shadow(radius: 2)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 14)
+                    
+                    // Seek Bar
+                    GeometryReader { geo in
+                        VStack(spacing: 0) {
+                            Spacer()
+                            Rectangle()
+                                .fill(Color.white.opacity(0.3))
+                                .frame(height: 6)
+                                .overlay(
+                                    Rectangle()
+                                        .fill(Color.white)
+                                        .frame(width: geo.size.width * CGFloat(model.progress), height: 6),
+                                    alignment: .leading
+                                )
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                        .highPriorityGesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    let percent = max(0, min(1, value.location.x / geo.size.width))
+                                    model.progress = percent
+                                }
+                                .onEnded { value in
+                                    let percent = max(0, min(1, value.location.x / geo.size.width))
+                                    model.seek(to: percent)
+                                }
+                        )
+                    }
+                    .frame(height: 44)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 10)
+                }
+            }
+        }
+        // Vertical swipe to change video
+        .gesture(
+            DragGesture()
+                .onEnded { value in
+                    if value.translation.height < -50 {
+                        // Swipe up -> next
+                        model.next()
+                    } else if value.translation.height > 50 {
+                        // Swipe down -> previous
+                        model.previous()
+                    }
+                }
+        )
+        .onAppear { model.start() }
+        .onDisappear { model.shutdown() }
     }
 }

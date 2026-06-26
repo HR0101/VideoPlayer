@@ -4,14 +4,16 @@ import SwiftUI
 struct VideoPlayerApp: App {
     @StateObject private var appSettings = AppSettings()
     @StateObject private var serverBrowser = ServerBrowser()
+    @StateObject private var serverManager = ServerManager()
     @StateObject private var downloadManager = DownloadManager()
 
     var body: some Scene {
         WindowGroup {
             ZStack(alignment: .bottom) {
-                AlbumListView()
+                MainTabView()
                     .environmentObject(appSettings)
                     .environmentObject(serverBrowser)
+                    .environmentObject(serverManager)
                     .environmentObject(downloadManager)
 
                 if downloadManager.isDownloading || downloadManager.successMessage != nil || downloadManager.errorMessage != nil {

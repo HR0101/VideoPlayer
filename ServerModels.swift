@@ -116,6 +116,54 @@ final class FavoritesManager: ObservableObject {
     }
 }
 
+// MARK: - ショート用お気に入り管理
+struct ShortsFavoriteClip: Codable, Identifiable {
+    let id: UUID
+    let videoID: String
+    let startTime: Double
+    let endTime: Double
+    let addedAt: Date
+}
+
+@MainActor
+final class ShortsFavoritesManager: ObservableObject {
+    static let shared = ShortsFavoritesManager()
+    private let key = "shorts_favorite_clips"
+    @Published private(set) var clips: [ShortsFavoriteClip] = []
+
+    private init() {
+        if let data = UserDefaults.standard.data(forKey: key),
+           let decoded = try? JSONDecoder().decode([ShortsFavoriteClip].self, from: data) {
+            clips = decoded
+        }
+    }
+
+    func addClip(videoID: String, startTime: Double, endTime: Double) {
+        let newClip = ShortsFavoriteClip(id: UUID(), videoID: videoID, startTime: startTime, endTime: endTime, addedAt: Date())
+        clips.insert(newClip, at: 0)
+        persist()
+    }
+    
+    func removeClip(id: UUID) {
+        clips.removeAll { $0.id == id }
+        persist()
+    }
+    
+    func isFavorite(videoID: String, startTime: Double) -> Bool {
+        clips.contains { $0.videoID == videoID && abs($0.startTime - startTime) < 0.5 }
+    }
+    
+    func getClipId(videoID: String, startTime: Double) -> UUID? {
+        clips.first(where: { $0.videoID == videoID && abs($0.startTime - startTime) < 0.5 })?.id
+    }
+
+    private func persist() {
+        if let encoded = try? JSONEncoder().encode(clips) {
+            UserDefaults.standard.set(encoded, forKey: key)
+        }
+    }
+}
+
 // MARK: - API通信マネージャー
 class ServerAPI {
 

@@ -16,7 +16,7 @@ final class PlayerManager: ObservableObject {
     private var timeObserverToken: Any?
     private var endObserver: NSObjectProtocol?
 
-    init(videoURL: URL) {
+    init(videoURL: URL, startAt: Double = 0) {
         addPeriodicObserver()
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main
@@ -26,7 +26,7 @@ final class PlayerManager: ObservableObject {
                   endedItem === self.player.currentItem else { return }
             Task { @MainActor in self.onEnded?() }
         }
-        setupPlayer(with: videoURL)
+        setupPlayer(with: videoURL, startAt: startAt)
     }
 
     private func addPeriodicObserver() {
@@ -42,7 +42,7 @@ final class PlayerManager: ObservableObject {
         }
     }
 
-    private func setupPlayer(with url: URL) {
+    private func setupPlayer(with url: URL, startAt: Double = 0) {
         Task {
             do {
                 let asset = AVURLAsset(url: url)
@@ -51,10 +51,14 @@ final class PlayerManager: ObservableObject {
                 if isPlayable {
                     let playerItem = AVPlayerItem(asset: asset)
                     self.player.replaceCurrentItem(with: playerItem)
+                    if startAt > 0 {
+                        let target = CMTime(seconds: startAt, preferredTimescale: 600)
+                        await self.player.seek(to: target)
+                    }
 
                     player.publisher(for: \.rate)
                         .map { $0 > 0 }
-                        .assign(to: \.isPlaying, on: self)
+                        .sink { [weak self] playing in self?.isPlaying = playing }
                         .store(in: &cancellables)
 
                     self.isReadyToPlay = true

@@ -14,22 +14,23 @@ struct LocalVideoThumbnailView: View {
                     Image(uiImage: thumbnail)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
+                        .transition(.opacity)
                 } else {
                     Rectangle()
-                        .foregroundColor(.gray.opacity(0.3))
-                        .overlay(ProgressView())
+                        .foregroundColor(.white.opacity(0.06))
+                        .shimmer()
                 }
             }
 
             if let duration = duration {
                 Text(duration)
-                    .font(.caption.weight(.semibold))
+                    .font(.caption2.weight(.bold).monospacedDigit())
                     .foregroundColor(.white)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(Color.black.opacity(0.5))
-                    .cornerRadius(4)
-                    .padding(4)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(.black.opacity(0.55))
+                    .clipShape(Capsule())
+                    .padding(5)
             }
         }
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)

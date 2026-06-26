@@ -1,4 +1,5 @@
 import SwiftUI
+import MediaServerKit
 import AVKit
 import UIKit
 import Photos
@@ -30,10 +31,31 @@ struct RemoteVideoListView: View {
     @State private var lastPlayedID: String?
     
     @AppStorage("isListViewMode") private var isListViewMode = false
-    
+
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private func adaptiveGridColumns(for width: CGFloat) -> [GridItem] {
+        let count: Int
+        if horizontalSizeClass == .regular {
+            if width > 1100 { count = 7 }
+            else if width > 900 { count = 6 }
+            else if width > 600 { count = 5 }
+            else { count = 4 }
+        } else {
+            count = 3
+        }
+        return Array(repeating: GridItem(.flexible(), spacing: 8), count: count)
+    }
+
     @State private var isSelectionMode = false
     @State private var selectedVideoIDs = Set<String>()
     @State private var showMoveTargetSheet = false
+
+    // 同時再生・スライドショー
+    @State private var showMultiPlayer = false
+    @State private var multiPlayVideos: [RemoteVideoInfo] = []
+    @State private var showSlideshow = false
+    @State private var slideshowVideos: [RemoteVideoInfo] = []
     
     @State private var showUploadSourceMenu = false
     @State private var showPhotoPicker = false
@@ -49,15 +71,6 @@ struct RemoteVideoListView: View {
 
     private let primaryDarkColor = Color.appDarkBackground
     private let accentGlowColor  = Color.appGold
-
-    private var backgroundGradient: some View {
-        LinearGradient(
-            colors: [Color.appDarkBackground, Color.appDarkSurface],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-        .ignoresSafeArea()
-    }
 
     private var columns: [GridItem] { Array(repeating: GridItem(.flexible(), spacing: 8), count: gridColumnCount) }
 
@@ -88,19 +101,21 @@ struct RemoteVideoListView: View {
 
     var body: some View {
         ZStack {
-            backgroundGradient
-            
+            AppBackground()
+
             Group {
                 if isLoading {
-                    ProgressView().tint(accentGlowColor).scaleEffect(1.2)
+                    loadingSkeleton
                 }
                 else if let errorMessage = errorMessage { placeholderView(icon: "exclamationmark.triangle.fill", title: "エラーが発生しました", message: errorMessage) }
                 else if videos.isEmpty { placeholderView(icon: albumID == "FAVORITES" ? "heart.slash" : "server.rack", title: "メディアがありません", message: emptyMessage) }
                 else {
-                    if isListViewMode {
-                        videoList
-                    } else {
-                        videoGrid
+                    GeometryReader { geo in
+                        if isListViewMode {
+                            videoList
+                        } else {
+                            videoGrid(width: geo.size.width)
+                        }
                     }
                 }
             }
@@ -109,55 +124,122 @@ struct RemoteVideoListView: View {
                 ZStack {
                     Color.black.opacity(0.7).ignoresSafeArea()
                     VStack(spacing: 24) {
-                        ProgressView().scaleEffect(1.5).tint(accentGlowColor)
-                        Text("サーバーへアップロード中...")
+                        ZStack {
+                            Circle()
+                                .stroke(Color.appGold.opacity(0.2), lineWidth: 3)
+                                .frame(width: 56, height: 56)
+                            ProgressView().scaleEffect(1.4).tint(accentGlowColor)
+                        }
+                        Text("サーバーへアップロード中…")
                             .foregroundColor(.white)
                             .font(.headline.weight(.medium))
                             .tracking(1.0)
                     }
                     .padding(40)
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(24)
-                    .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.1), lineWidth: 1))
-                    .shadow(color: .black.opacity(0.4), radius: 20, x: 0, y: 10)
+                    .glassCard(cornerRadius: 28)
                 }
+                .transition(.opacity)
             }
-            
+
             if isSelectionMode {
                 VStack {
                     Spacer()
-                    HStack(spacing: 16) {
-                        Button(action: deleteSelectedVideos) {
-                            Text("\(selectedVideoIDs.count)件削除")
-                                .font(.headline.weight(.bold))
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(selectedVideoIDs.isEmpty ? Color.white.opacity(0.1) : Color.red.opacity(0.8))
-                                .foregroundColor(selectedVideoIDs.isEmpty ? .gray : .white)
-                                .cornerRadius(16)
-                                .shadow(color: selectedVideoIDs.isEmpty ? .clear : Color.red.opacity(0.3), radius: 8, x: 0, y: 4)
-                        }.disabled(selectedVideoIDs.isEmpty)
-                        
-                        if !isVirtualAlbum {
-                            Button(action: { showMoveTargetSheet = true }) {
-                                Text("移動")
-                                    .font(.headline.weight(.bold))
+                    VStack(spacing: 0) {
+                        // 同時再生・スライドショー行
+                        let selectedVideoCount = sortedAndFilteredVideos.filter { selectedVideoIDs.contains($0.id) && !$0.isPhoto }.count
+                        HStack(spacing: 10) {
+                            Button(action: {
+                                Haptics.light()
+                                multiPlayVideos = sortedAndFilteredVideos.filter { selectedVideoIDs.contains($0.id) && !$0.isPhoto }
+                                showMultiPlayer = true
+                            }) {
+                                Label("同時再生", systemImage: "square.grid.2x2.fill")
+                                    .font(.subheadline.weight(.bold))
                                     .frame(maxWidth: .infinity)
-                                    .padding()
-                                    .background(selectedVideoIDs.isEmpty ? Color.white.opacity(0.1) : accentGlowColor)
-                                    .foregroundColor(selectedVideoIDs.isEmpty ? .gray : primaryDarkColor)
-                                    .cornerRadius(16)
-                                    .shadow(color: selectedVideoIDs.isEmpty ? .clear : accentGlowColor.opacity(0.3), radius: 8, x: 0, y: 4)
-                            }.disabled(selectedVideoIDs.isEmpty)
+                                    .padding(.vertical, 12)
+                                    .background(
+                                        selectedVideoCount >= 2
+                                        ? AnyShapeStyle(LinearGradient(colors: [.blue, .purple], startPoint: .leading, endPoint: .trailing))
+                                        : AnyShapeStyle(Color.white.opacity(0.08))
+                                    )
+                                    .foregroundStyle(selectedVideoCount >= 2 ? .white : Color.appTextTertiary)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(PressableCardStyle(scale: 0.97))
+                            .disabled(selectedVideoCount < 2)
+
+                            Button(action: {
+                                Haptics.light()
+                                slideshowVideos = sortedAndFilteredVideos.filter { selectedVideoIDs.contains($0.id) && !$0.isPhoto }
+                                showSlideshow = true
+                            }) {
+                                Label("スライドショー", systemImage: "play.square.stack.fill")
+                                    .font(.subheadline.weight(.bold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(
+                                        selectedVideoCount >= 2
+                                        ? AnyShapeStyle(LinearGradient(colors: [.green, .teal], startPoint: .leading, endPoint: .trailing))
+                                        : AnyShapeStyle(Color.white.opacity(0.08))
+                                    )
+                                    .foregroundStyle(selectedVideoCount >= 2 ? .white : Color.appTextTertiary)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(PressableCardStyle(scale: 0.97))
+                            .disabled(selectedVideoCount < 2)
                         }
+                        .padding(.horizontal, 20)
+                        .padding(.top, 10)
+                        .padding(.bottom, 6)
+
+                        // 削除・移動行
+                        HStack(spacing: 14) {
+                            Button(action: { Haptics.warning(); deleteSelectedVideos() }) {
+                                Label("\(selectedVideoIDs.count)件削除", systemImage: "trash.fill")
+                                    .font(.subheadline.weight(.bold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                                    .background(
+                                        selectedVideoIDs.isEmpty
+                                        ? AnyShapeStyle(Color.white.opacity(0.08))
+                                        : AnyShapeStyle(LinearGradient(colors: [.red, .red.opacity(0.75)], startPoint: .top, endPoint: .bottom))
+                                    )
+                                    .foregroundStyle(selectedVideoIDs.isEmpty ? Color.appTextTertiary : .white)
+                                    .clipShape(Capsule())
+                                    .shadow(color: selectedVideoIDs.isEmpty ? .clear : Color.red.opacity(0.3), radius: 8, x: 0, y: 4)
+                            }
+                            .buttonStyle(PressableCardStyle(scale: 0.97))
+                            .disabled(selectedVideoIDs.isEmpty)
+
+                            if !isVirtualAlbum {
+                                Button(action: { Haptics.light(); showMoveTargetSheet = true }) {
+                                    Label("移動", systemImage: "folder.fill")
+                                        .font(.subheadline.weight(.bold))
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 14)
+                                        .background(
+                                            selectedVideoIDs.isEmpty
+                                            ? AnyShapeStyle(Color.white.opacity(0.08))
+                                            : AnyShapeStyle(AppTheme.goldGradient)
+                                        )
+                                        .foregroundStyle(selectedVideoIDs.isEmpty ? Color.appTextTertiary : Color.appDarkBackground)
+                                        .clipShape(Capsule())
+                                        .shadow(color: selectedVideoIDs.isEmpty ? .clear : accentGlowColor.opacity(0.3), radius: 8, x: 0, y: 4)
+                                }
+                                .buttonStyle(PressableCardStyle(scale: 0.97))
+                                .disabled(selectedVideoIDs.isEmpty)
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 14)
                     }
-                    .padding(20)
                     .background(.ultraThinMaterial)
                     .overlay(Rectangle().frame(height: 0.5).foregroundColor(Color.white.opacity(0.1)), alignment: .top)
                 }
-                .transition(.move(edge: .bottom))
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isSelectionMode)
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "検索")
         .toolbarColorScheme(.dark, for: .navigationBar)
@@ -263,6 +345,12 @@ struct RemoteVideoListView: View {
                 )
             }
         }
+        .fullScreenCover(isPresented: $showMultiPlayer) {
+            RemoteMultiPlayerView(videos: multiPlayVideos, serverAddress: serverAddress)
+        }
+        .fullScreenCover(isPresented: $showSlideshow) {
+            RemoteSlideshowPlayerView(videos: slideshowVideos, serverAddress: serverAddress)
+        }
         .sheet(item: $videoForInfoSheet) { video in VideoInfoSheetView(video: video, serverAddress: serverAddress, downloadManager: downloadManager) }
         .task { 
             if videos.isEmpty { await fetchVideosFromServer() }
@@ -288,10 +376,17 @@ struct RemoteVideoListView: View {
     }
     
     // MARK: - アイコン（グリッド）表示
-    private var videoGrid: some View {
+    private func videoGrid(width: CGFloat) -> some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 8) {
-                ForEach(sortedAndFilteredVideos) { video in thumbnailCell(for: video) }
+            LazyVGrid(columns: adaptiveGridColumns(for: width), spacing: 8) {
+                ForEach(sortedAndFilteredVideos) { video in
+                    thumbnailCell(for: video)
+                        .scrollTransition(.animated(.spring(response: 0.4, dampingFraction: 0.8))) { content, phase in
+                            content
+                                .opacity(phase.isIdentity ? 1 : 0.5)
+                                .scaleEffect(phase.isIdentity ? 1 : 0.92)
+                        }
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 16)
@@ -299,13 +394,18 @@ struct RemoteVideoListView: View {
         }
         .refreshable { await fetchVideosFromServer() }
     }
-    
+
     // MARK: - リスト表示
     private var videoList: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
                 ForEach(sortedAndFilteredVideos) { video in
                     listRow(for: video)
+                        .scrollTransition(.animated(.spring(response: 0.4, dampingFraction: 0.8))) { content, phase in
+                            content
+                                .opacity(phase.isIdentity ? 1 : 0.5)
+                                .scaleEffect(phase.isIdentity ? 1 : 0.96)
+                        }
                 }
             }
             .padding(.vertical, 16)
@@ -413,8 +513,10 @@ struct RemoteVideoListView: View {
     // MARK: - 共通のアクション（タップ・メニュー）
     private func handleVideoTap(_ video: RemoteVideoInfo) {
         if isSelectionMode {
+            Haptics.soft()
             if selectedVideoIDs.contains(video.id) { selectedVideoIDs.remove(video.id) } else { selectedVideoIDs.insert(video.id) }
         } else {
+            Haptics.light()
             if video.isPhoto { 
                 photoToView = video
             } else {
@@ -525,6 +627,18 @@ struct RemoteVideoListView: View {
                 errorMessage = "取得失敗: \(error.localizedDescription)"
             }
         }
+        
+        // HDDのスリープ復帰（スピンアップ）等のため、アルバムを開いた直後に最初の動画の先頭データをバックグラウンドで要求しておく
+        if let firstVid = self.videos.first(where: { !$0.isPhoto }),
+           let wakeupURL = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(firstVid.id)") {
+            Task.detached {
+                var req = URLRequest(url: wakeupURL)
+                req.setValue("bytes=0-1024", forHTTPHeaderField: "Range")
+                // キャッシュを無視して必ずサーバーにアクセスさせる
+                req.cachePolicy = .reloadIgnoringLocalCacheData
+                _ = try? await URLSession.shared.data(for: req)
+            }
+        }
     }
     
     private func executeMove(to targetID: String) { let ids = Array(selectedVideoIDs); Task { _ = try? await ServerAPI.moveVideos(serverAddress: serverAddress, videoIDs: ids, sourceAlbumID: albumID, targetAlbumID: targetID); isSelectionMode = false; selectedVideoIDs.removeAll(); await fetchVideosFromServer() } }
@@ -583,6 +697,43 @@ struct RemoteVideoListView: View {
         itemsPendingDeletion.removeAll()
     }
     
+    /// 読み込み中のスケルトン表示（グリッド/リストの形を模倣）
+    @ViewBuilder
+    private var loadingSkeleton: some View {
+        if isListViewMode {
+            VStack(spacing: 12) {
+                ForEach(0..<6, id: \.self) { _ in
+                    HStack(spacing: 16) {
+                        SkeletonCard(cornerRadius: AppTheme.radiusS)
+                            .frame(width: 80, height: 80)
+                        VStack(alignment: .leading, spacing: 8) {
+                            SkeletonCard(cornerRadius: 4).frame(width: 160, height: 12)
+                            SkeletonCard(cornerRadius: 4).frame(width: 90, height: 10)
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .glassCard(cornerRadius: AppTheme.radiusM)
+                    .padding(.horizontal, 16)
+                }
+                Spacer()
+            }
+            .padding(.top, 16)
+        } else {
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 8) {
+                    ForEach(0..<12, id: \.self) { _ in
+                        SkeletonCard(cornerRadius: AppTheme.radiusM)
+                            .aspectRatio(1, contentMode: .fit)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 16)
+            }
+            .scrollDisabled(true)
+        }
+    }
+
     private func placeholderView(icon: String, title: String, message: String) -> some View {
         VStack(spacing: 20) {
             Image(systemName: icon)
@@ -746,26 +897,44 @@ struct ServerDocumentPicker: UIViewControllerRepresentable {
 private struct RemoteVideoThumbnailView: View {
     let thumbnailURL: URL?
     let duration: TimeInterval
-    private let primaryDarkColor = Color.appDarkBackground
-    
+
     var body: some View {
         ZStack {
-            Rectangle().fill(primaryDarkColor)
+            Rectangle().fill(Color.appDarkSurface)
             AsyncImage(url: thumbnailURL) { phase in
                 switch phase {
-                case .success(let image): image.resizable().aspectRatio(contentMode: .fill)
-                case .failure: Image(systemName: "photo").font(.largeTitle).foregroundColor(.white.opacity(0.2))
-                default: ProgressView().tint(Color.appGold)
+                case .success(let image):
+                    image.resizable().aspectRatio(contentMode: .fill)
+                        .transition(.opacity)
+                case .failure:
+                    Image(systemName: "photo").font(.largeTitle).foregroundColor(.white.opacity(0.2))
+                default:
+                    SkeletonCard(cornerRadius: 0)
                 }
             }
         }
-        .aspectRatio(1, contentMode: .fit).cornerRadius(16).clipped().shadow(color: Color.black.opacity(0.4), radius: 6, x: 0, y: 4)
-        .overlay(alignment: .bottom) { if duration > 0 { LinearGradient(gradient: Gradient(colors: [.clear, .black.opacity(0.7)]), startPoint: .top, endPoint: .bottom).frame(height: 40) } }
+        .aspectRatio(1, contentMode: .fit)
+        .overlay(alignment: .bottom) {
+            if duration > 0 {
+                LinearGradient(gradient: Gradient(colors: [.clear, .black.opacity(0.7)]), startPoint: .top, endPoint: .bottom)
+                    .frame(height: 40)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusM, style: .continuous))
+        .shadow(color: Color.black.opacity(0.4), radius: 6, x: 0, y: 4)
         .overlay(alignment: .bottomTrailing) {
-            if duration > 0 { Text(formatDuration(duration)).font(.caption2.weight(.bold)).foregroundColor(.white).padding(.horizontal, 6).padding(.vertical, 4).background(.ultraThinMaterial.opacity(0.9)).cornerRadius(6).padding(8) }
+            if duration > 0 {
+                Text(duration.mediaDurationText)
+                    .font(.caption2.weight(.bold).monospacedDigit())
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(.black.opacity(0.55))
+                    .clipShape(Capsule())
+                    .padding(8)
+            }
         }
     }
-    private func formatDuration(_ totalSeconds: TimeInterval) -> String { let secondsInt = Int(totalSeconds); return String(format: "%d:%02d", secondsInt / 60, secondsInt % 60) }
 }
 
 private enum RepeatMode { case off, all, one }
@@ -790,6 +959,17 @@ private struct DraggablePlayerView: View {
     @State private var showControls: Bool = true
     @State private var hideControlsTask: Task<Void, Never>? = nil
 
+    // シークバー操作中の状態
+    @State private var isScrubbing: Bool = false
+    @State private var scrubTarget: Double = 0
+
+    // ダブルタップ ±10秒のフィードバック表示
+    private struct SeekFeedback: Equatable {
+        let forward: Bool
+        let id: UUID
+    }
+    @State private var seekFeedback: SeekFeedback? = nil
+
     @State private var isContinuous: Bool = true
     @State private var isShuffle: Bool = false
     @State private var repeatMode: RepeatMode = .off
@@ -797,6 +977,7 @@ private struct DraggablePlayerView: View {
     @AppStorage("slideshowClipDuration") private var slideshowClipDuration: Double = 10
     @State private var slideshowTask: Task<Void, Never>? = nil
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     private let accentGlowColor = Color.appGold
 
     init(videos: [RemoteVideoInfo], initialIndex: Int, serverAddress: String, videoToPlay: Binding<RemoteVideoInfo?>, playingVideoID: Binding<String?>) {
@@ -812,6 +993,38 @@ private struct DraggablePlayerView: View {
     }
     
     var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                // 縦向きは YouTube 風（上で再生・下で一覧）、横向きは従来通り全画面
+                if geo.size.width <= geo.size.height {
+                    portraitBody(width: geo.size.width, topInset: geo.safeAreaInsets.top)
+                } else {
+                    landscapeBody
+                }
+                keyboardShortcutButtons
+            }
+        }
+        .ignoresSafeArea()
+        .background(Color.black.ignoresSafeArea())
+        .onAppear {
+            startHideTimer()
+            playerManager.onEnded = { handlePlaybackEnded() }
+        }
+        .onReceive(playerManager.$isReadyToPlay) { ready in
+            if ready && isSlideshow { scheduleSlideshowAdvance() }
+        }
+        .onDisappear {
+            slideshowTask?.cancel()
+            prepareTask?.cancel()
+            cleanupProxies()
+            playerManager.shutdown()
+        }
+        .persistentSystemOverlays(.hidden)
+    }
+
+    // MARK: - 横向き（全画面）レイアウト
+
+    private var landscapeBody: some View {
         ZStack {
             Color.black.opacity(1.0 - Double(max(abs(dragOffset.width), max(0, dragOffset.height)) / 500))
             
@@ -831,122 +1044,43 @@ private struct DraggablePlayerView: View {
                 }
             }
             
-            VStack {
-                VideoPlayer(player: playerManager.player)
-                    .scaleEffect(max(0.8, 1 - (max(abs(dragOffset.width), max(0, dragOffset.height)) / 800)))
+            // 映像面（OS標準コントロールなし。カスタムコントロールを重ねる）
+            ZStack {
+                PlayerLayerView(player: playerManager.player)
+                if !playerManager.isReadyToPlay {
+                    ProgressView().tint(.white).scaleEffect(1.3)
+                }
             }
+            .scaleEffect(max(0.8, 1 - (max(abs(dragOffset.width), max(0, dragOffset.height)) / 800)))
             .offset(x: dragOffset.width, y: dragOffset.height > 0 ? dragOffset.height : 0)
             .opacity(1.0 - Double(max(abs(dragOffset.width), max(0, dragOffset.height)) / 300))
-            
+
+            // タップゾーン（中央: 表示切替 / 両端: ダブルタップで±10秒）
+            tapZones
+
+            // ±10秒のフィードバック
+            seekFeedbackOverlay
+
             if showControls {
-                VStack(spacing: 14) {
-                    HStack(alignment: .top, spacing: 12) {
-                        Text(videos[currentIndex].filename)
-                            .font(.headline.weight(.semibold))
-                            .foregroundColor(.white)
-                            .lineLimit(2)
-                            .shadow(radius: 2)
-                        Spacer(minLength: 8)
-                        Menu {
-                            Button(action: { changeQuality("original") }) { if selectedQuality == "original" { Label("オリジナル", systemImage: "checkmark") } else { Text("オリジナル") } }
-                            Button(action: { changeQuality("1080p") }) { if selectedQuality == "1080p" { Label("1080p (軽量・変換)", systemImage: "checkmark") } else { Text("1080p (軽量・変換)") } }
-                        } label: {
-                            HStack(spacing: 6) { Image(systemName: "line.3.horizontal.decrease.circle"); Text(qualityLabel(selectedQuality)).font(.subheadline.bold()) }
-                            .padding(.horizontal, 12).padding(.vertical, 8).background(.ultraThinMaterial).overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 0.5)).clipShape(Capsule()).shadow(color: .black.opacity(0.3), radius: 5, x: 0, y: 2).foregroundColor(.white)
-                        }
-                        Button(action: toggleFavorite) {
-                            Image(systemName: favorites.isFavorite(videos[currentIndex].id) ? "heart.fill" : "heart")
-                                .font(.title2)
-                                .foregroundColor(favorites.isFavorite(videos[currentIndex].id) ? .pink : .white)
-                                .shadow(radius: 2)
-                        }
-                    }
-
-                    HStack(spacing: 22) {
-                        controlToggle(icon: "shuffle", active: isShuffle) { isShuffle.toggle(); startHideTimer() }
-                        controlToggle(icon: repeatMode == .one ? "repeat.1" : "repeat", active: repeatMode != .off) { cycleRepeatMode(); startHideTimer() }
-                        controlToggle(icon: "infinity", active: isContinuous) { isContinuous.toggle(); startHideTimer() }
-                        Menu {
-                            Button(isSlideshow ? "スライドショーを停止" : "スライドショーを開始") { toggleSlideshow(); startHideTimer() }
-                            Picker("1本あたりの秒数", selection: $slideshowClipDuration) {
-                                Text("5秒").tag(5.0)
-                                Text("10秒").tag(10.0)
-                                Text("15秒").tag(15.0)
-                                Text("30秒").tag(30.0)
-                                Text("60秒").tag(60.0)
-                            }
-                        } label: {
-                            Image(systemName: "play.square.stack")
-                                .foregroundColor(isSlideshow ? accentGlowColor : .white.opacity(0.6))
-                                .padding(8)
-                                .background(isSlideshow ? accentGlowColor.opacity(0.18) : Color.clear)
-                                .clipShape(Circle())
-                        }
-                    }
-                    .font(.subheadline)
-
-                    Spacer()
-                }
-                .padding(.top, 60)
-                .padding(.horizontal, 20)
-                .opacity(1.0 - Double(max(abs(dragOffset.width), max(0, dragOffset.height)) / 100))
-                .transition(.opacity)
+                controlsOverlay(compact: false)
+                    .opacity(1.0 - Double(max(abs(dragOffset.width), max(0, dragOffset.height)) / 100))
+                    .transition(.opacity)
             }
 
             if isPreparingQuality {
-                ZStack {
-                    Color.black.opacity(0.55).edgesIgnoringSafeArea(.all)
-                    VStack(spacing: 14) {
-                        ProgressView().scaleEffect(1.3).tint(.white)
-                        Text("1080pに変換中…").foregroundColor(.white).font(.headline)
-                        Text("\(Int(prepareProgress * 100))%")
-                            .foregroundColor(.white.opacity(0.85))
-                            .font(.subheadline.monospacedDigit())
-                        Button("キャンセル") {
-                            prepareTask?.cancel()
-                            isPreparingQuality = false
-                            selectedQuality = "original"
-                        }
-                        .foregroundColor(accentGlowColor)
-                        .padding(.top, 4)
-                    }
-                    .padding(28)
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(18)
-                }
-                .transition(.opacity)
+                preparingOverlay
             }
 
-            Group {
-                Button("") { togglePlayPause() }.keyboardShortcut(.space, modifiers: [])
-                Button("") { togglePlayPause() }.keyboardShortcut("k", modifiers: [])
-                Button("") { seek(forward: true) }.keyboardShortcut(.rightArrow, modifiers: [])
-                Button("") { seek(forward: true) }.keyboardShortcut("l", modifiers: [])
-                Button("") { seek(forward: false) }.keyboardShortcut(.leftArrow, modifiers: [])
-                Button("") { seek(forward: false) }.keyboardShortcut("j", modifiers: [])
-                Button("") { adjustVolume(up: true) }.keyboardShortcut(.upArrow, modifiers: [])
-                Button("") { adjustVolume(up: false) }.keyboardShortcut(.downArrow, modifiers: [])
-                Button("") { toggleMute() }.keyboardShortcut("m", modifiers: [])
-                Button("") { toggleFullScreen() }.keyboardShortcut("f", modifiers: [])
-                Button("") { changeVideo(offset: -1) }.keyboardShortcut(.leftArrow, modifiers: .shift)
-                Button("") { changeVideo(offset: 1) }.keyboardShortcut(.rightArrow, modifiers: .shift)
-                Button("") { videoToPlay = nil }.keyboardShortcut(.escape, modifiers: [])
-            }
-            .opacity(0)
-            .frame(width: 0, height: 0)
         }
         .edgesIgnoringSafeArea(.all)
         .simultaneousGesture(
-            TapGesture()
-                .onEnded { _ in
-                    withAnimation { showControls.toggle() }
-                    if showControls { startHideTimer() } else { hideControlsTask?.cancel() }
-                }
-        )
-        .simultaneousGesture(
             DragGesture()
-                .onChanged { value in dragOffset = value.translation }
+                .onChanged { value in
+                    guard !isScrubbing else { return }
+                    dragOffset = value.translation
+                }
                 .onEnded { value in
+                    guard !isScrubbing else { dragOffset = .zero; return }
                     let w = dragOffset.width
                     let h = dragOffset.height
 
@@ -966,29 +1100,604 @@ private struct DraggablePlayerView: View {
                     }
                 }
         )
-        .onAppear {
-            startHideTimer()
-            playerManager.onEnded = { handlePlaybackEnded() }
+    }
+
+    /// 物理キーボード（iPad/Mac）用のショートカット。0サイズで常駐させる。
+    private var keyboardShortcutButtons: some View {
+        Group {
+            Button("") { togglePlayPause() }.keyboardShortcut(.space, modifiers: [])
+            Button("") { togglePlayPause() }.keyboardShortcut("k", modifiers: [])
+            Button("") { seek(forward: true) }.keyboardShortcut(.rightArrow, modifiers: [])
+            Button("") { seek(forward: true) }.keyboardShortcut("l", modifiers: [])
+            Button("") { seek(forward: false) }.keyboardShortcut(.leftArrow, modifiers: [])
+            Button("") { seek(forward: false) }.keyboardShortcut("j", modifiers: [])
+            Button("") { adjustVolume(up: true) }.keyboardShortcut(.upArrow, modifiers: [])
+            Button("") { adjustVolume(up: false) }.keyboardShortcut(.downArrow, modifiers: [])
+            Button("") { toggleMute() }.keyboardShortcut("m", modifiers: [])
+            Button("") { toggleFullScreen() }.keyboardShortcut("f", modifiers: [])
+            Button("") { changeVideo(offset: -1) }.keyboardShortcut(.leftArrow, modifiers: .shift)
+            Button("") { changeVideo(offset: 1) }.keyboardShortcut(.rightArrow, modifiers: .shift)
+            Button("") { videoToPlay = nil }.keyboardShortcut(.escape, modifiers: [])
         }
-        .onReceive(playerManager.$isReadyToPlay) { ready in
-            if ready && isSlideshow { scheduleSlideshowAdvance() }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+    }
+
+    /// 画質変換中のローディングオーバーレイ（縦・横で共用）
+    @ViewBuilder
+    private var preparingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.55).edgesIgnoringSafeArea(.all)
+            VStack(spacing: 14) {
+                ProgressView().scaleEffect(1.3).tint(.white)
+                Text("1080pに変換中…").foregroundColor(.white).font(.headline)
+                Text("\(Int(prepareProgress * 100))%")
+                    .foregroundColor(.white.opacity(0.85))
+                    .font(.subheadline.monospacedDigit())
+                Button("キャンセル") {
+                    prepareTask?.cancel()
+                    isPreparingQuality = false
+                    selectedQuality = "original"
+                }
+                .foregroundColor(accentGlowColor)
+                .padding(.top, 4)
+            }
+            .padding(28)
+            .glassCard()
         }
-        .onDisappear {
-            slideshowTask?.cancel()
-            prepareTask?.cancel()
-            cleanupProxies()
-            playerManager.shutdown()
+        .transition(.opacity)
+    }
+
+    // MARK: - 縦向き（YouTube風）レイアウト：上部で再生・下部で他の動画を探す
+
+    private func portraitBody(width: CGFloat, topInset: CGFloat) -> some View {
+        let videoHeight = width * 9.0 / 16.0
+        // ダイナミックアイランドとの重なりを回避するため topInset に追加余白を加える
+        let safeTop = topInset + 8
+        return VStack(spacing: 0) {
+            // ダイナミックアイランド裏の黒帯
+            Color.black
+                .frame(height: safeTop)
+
+            // 上部: 動画（16:9 固定）
+            ZStack {
+                Color.black
+                PlayerLayerView(player: playerManager.player)
+                if !playerManager.isReadyToPlay {
+                    ProgressView().tint(.white).scaleEffect(1.2)
+                }
+                tapZones
+                seekFeedbackOverlay
+                if showControls {
+                    controlsOverlay(compact: true)
+                        .transition(.opacity)
+                }
+                if isPreparingQuality {
+                    preparingOverlay
+                }
+            }
+            .frame(width: width, height: videoHeight)
+            .clipped()
+            .contentShape(Rectangle())
+            .offset(y: dragOffset.height > 0 ? dragOffset.height : 0)
+            .simultaneousGesture(
+                DragGesture()
+                    .onChanged { value in
+                        guard !isScrubbing else { return }
+                        dragOffset = value.translation
+                    }
+                    .onEnded { _ in
+                        guard !isScrubbing else { dragOffset = .zero; return }
+                        let w = dragOffset.width
+                        let h = dragOffset.height
+                        if h > 90 && abs(h) > abs(w) {
+                            playerManager.shutdown()
+                            videoToPlay = nil
+                        } else if abs(w) > 90 && abs(w) > abs(h) {
+                            changeVideo(offset: w < 0 ? 1 : -1)
+                            withAnimation(.spring()) { dragOffset = .zero }
+                        } else {
+                            withAnimation(.spring()) { dragOffset = .zero }
+                        }
+                    }
+            )
+
+            // 下部: 他の動画リスト / グリッド（YouTube風の「次の動画」）
+            upNextList(availableWidth: width)
         }
-        .persistentSystemOverlays(.hidden)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color.appDarkBackground.ignoresSafeArea())
+    }
+
+    /// iPad 等の幅広端末ではグリッド、iPhone 等ではリスト表示で「次の動画」を表示
+    private func upNextList(availableWidth: CGFloat) -> some View {
+        let useGrid = horizontalSizeClass == .regular && availableWidth > 500
+        return ScrollViewReader { proxy in
+            ScrollView {
+                // ヘッダー行
+                HStack {
+                    Text("再生中・他の動画")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.55))
+                    Spacer()
+                    Text("\(videos.count)本")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+
+                if useGrid {
+                    // iPadなど横幅の広い端末ではグリッド表示
+                    let gridColumns = Array(repeating: GridItem(.flexible(), spacing: 12), count: upNextGridColumnCount(width: availableWidth))
+                    LazyVGrid(columns: gridColumns, spacing: 12) {
+                        ForEach(Array(videos.enumerated()), id: \.element.id) { index, video in
+                            Button { selectFromList(index) } label: {
+                                upNextGridCell(index: index, video: video)
+                            }
+                            .buttonStyle(.plain)
+                            .id(index)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                } else {
+                    // iPhone等ではリスト表示
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(videos.enumerated()), id: \.element.id) { index, video in
+                            Button { selectFromList(index) } label: {
+                                upNextRow(index: index, video: video)
+                            }
+                            .buttonStyle(.plain)
+                            .id(index)
+                        }
+                    }
+                }
+
+                Spacer().frame(height: 32)
+            }
+            .scrollIndicators(.hidden)
+            .onChange(of: currentIndex) { _, newIndex in
+                withAnimation(.easeInOut) { proxy.scrollTo(newIndex, anchor: .center) }
+            }
+            .onAppear {
+                proxy.scrollTo(currentIndex, anchor: .center)
+            }
+        }
+    }
+
+    /// 画面幅に応じたグリッド列数を計算
+    private func upNextGridColumnCount(width: CGFloat) -> Int {
+        if width > 1100 { return 5 }
+        if width > 900  { return 4 }
+        if width > 600  { return 3 }
+        return 2
+    }
+
+    /// iPad用のグリッドセル（サムネ＋タイトル＋バッジ）
+    private func upNextGridCell(index: Int, video: RemoteVideoInfo) -> some View {
+        let isCurrent = index == currentIndex
+        return VStack(alignment: .leading, spacing: 8) {
+            ZStack(alignment: .bottomTrailing) {
+                AsyncImage(url: ServerAuth.mediaURL(address: serverAddress, path: "/thumbnail/\(video.id)")) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    case .failure:
+                        ZStack { Color.appDarkSurface; Image(systemName: "film").foregroundStyle(.white.opacity(0.25)) }
+                    default:
+                        Color.appDarkSurface
+                    }
+                }
+                .frame(minHeight: 100)
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    if isCurrent {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Color.appGold, lineWidth: 2.5)
+                    }
+                }
+
+                if video.duration > 0 {
+                    Text(video.duration.mediaDurationText)
+                        .font(.caption2.weight(.bold).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(.black.opacity(0.78))
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        .padding(6)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(video.filename)
+                    .font(.caption.weight(isCurrent ? .bold : .medium))
+                    .foregroundStyle(isCurrent ? Color.appGold : .white)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+
+                HStack(spacing: 4) {
+                    if isCurrent {
+                        HStack(spacing: 3) {
+                            Image(systemName: "play.fill").font(.system(size: 8))
+                            Text("再生中")
+                        }
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(Color.appGold)
+                    }
+                    if favorites.isFavorite(video.id) {
+                        Image(systemName: "heart.fill").font(.system(size: 10)).foregroundStyle(.pink)
+                    }
+                }
+            }
+            .padding(.horizontal, 4)
+        }
+        .padding(6)
+        .background(isCurrent ? Color.white.opacity(0.06) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(Rectangle())
+    }
+
+    /// iPhone用のリスト行
+    private func upNextRow(index: Int, video: RemoteVideoInfo) -> some View {
+        let isCurrent = index == currentIndex
+        return HStack(alignment: .top, spacing: 10) {
+            ZStack(alignment: .bottomTrailing) {
+                AsyncImage(url: ServerAuth.mediaURL(address: serverAddress, path: "/thumbnail/\(video.id)")) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    case .failure:
+                        ZStack { Color.appDarkSurface; Image(systemName: "film").foregroundStyle(.white.opacity(0.25)) }
+                    default:
+                        Color.appDarkSurface
+                    }
+                }
+                .frame(width: 136, height: 76)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay {
+                    if isCurrent {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.appGold, lineWidth: 2)
+                    }
+                }
+
+                if video.duration > 0 {
+                    Text(video.duration.mediaDurationText)
+                        .font(.caption2.weight(.bold).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(.black.opacity(0.78))
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        .padding(5)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(video.filename)
+                    .font(.subheadline.weight(isCurrent ? .bold : .medium))
+                    .foregroundStyle(isCurrent ? Color.appGold : .white)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+
+                if isCurrent {
+                    HStack(spacing: 3) {
+                        Image(systemName: "play.fill").font(.system(size: 9))
+                        Text("再生中")
+                    }
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(Color.appGold)
+                } else if favorites.isFavorite(video.id) {
+                    Image(systemName: "heart.fill").font(.caption2).foregroundStyle(.pink)
+                }
+            }
+            .padding(.top, 2)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(isCurrent ? Color.white.opacity(0.06) : Color.clear)
+        .contentShape(Rectangle())
+    }
+
+    private func selectFromList(_ index: Int) {
+        guard index != currentIndex else {
+            toggleControlsVisibility()
+            return
+        }
+        goTo(index: index)
+    }
+
+    // MARK: - カスタムコントロール UI
+
+    private func controlsOverlay(compact: Bool) -> some View {
+        VStack(spacing: 0) {
+            topBar(compact: compact)
+            Spacer()
+            bottomControls(compact: compact)
+        }
+        .overlay(centerControls)
+    }
+
+    /// 上部バー: 閉じる / タイトル / 画質 / お気に入り
+    private func topBar(compact: Bool) -> some View {
+        HStack(alignment: .center, spacing: 14) {
+            Button(action: { playerManager.shutdown(); videoToPlay = nil }) {
+                Image(systemName: "xmark")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background(.white.opacity(0.12))
+                    .clipShape(Circle())
+            }
+
+            Text(videos[currentIndex].filename)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .shadow(radius: 2)
+
+            Spacer(minLength: 8)
+
+            Menu {
+                Button(action: { changeQuality("original") }) { if selectedQuality == "original" { Label("オリジナル", systemImage: "checkmark") } else { Text("オリジナル") } }
+                Button(action: { changeQuality("1080p") }) { if selectedQuality == "1080p" { Label("1080p (軽量・変換)", systemImage: "checkmark") } else { Text("1080p (軽量・変換)") } }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
+                    Text(qualityLabel(selectedQuality)).font(.caption.weight(.bold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .background(.white.opacity(0.12))
+                .clipShape(Capsule())
+            }
+
+            Button(action: toggleFavorite) {
+                let fav = favorites.isFavorite(videos[currentIndex].id)
+                Image(systemName: fav ? "heart.fill" : "heart")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(fav ? .pink : .white)
+                    .symbolEffect(.bounce, value: fav)
+                    .frame(width: 34, height: 34)
+                    .background(.white.opacity(0.12))
+                    .clipShape(Circle())
+            }
+        }
+        .padding(.horizontal, compact ? 12 : 16)
+        .padding(.top, compact ? 10 : 58)
+        .padding(.bottom, compact ? 14 : 36)
+        .background(AppTheme.topScrim.allowsHitTesting(false))
+    }
+
+    /// 中央の再生コントロール
+    private var centerControls: some View {
+        HStack(spacing: 30) {
+            Button(action: { changeVideo(offset: -1) }) {
+                Image(systemName: "backward.end.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.white.opacity(currentIndex > 0 || isShuffle || repeatMode == .all ? 0.9 : 0.3))
+                    .frame(width: 44, height: 44)
+            }
+
+            Button(action: { Haptics.soft(); quickSeek(forward: false); startHideTimer() }) {
+                Image(systemName: "gobackward.10")
+                    .font(.title2.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .frame(width: 48, height: 48)
+            }
+
+            Button(action: togglePlayPause) {
+                Image(systemName: playerManager.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundStyle(.white)
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(width: 74, height: 74)
+                    .background(.white.opacity(0.14))
+                    .background(.ultraThinMaterial.opacity(0.6))
+                    .clipShape(Circle())
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
+            }
+
+            Button(action: { Haptics.soft(); quickSeek(forward: true); startHideTimer() }) {
+                Image(systemName: "goforward.10")
+                    .font(.title2.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .frame(width: 48, height: 48)
+            }
+
+            Button(action: { changeVideo(offset: 1) }) {
+                Image(systemName: "forward.end.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.white.opacity(currentIndex < videos.count - 1 || isShuffle || repeatMode == .all ? 0.9 : 0.3))
+                    .frame(width: 44, height: 44)
+            }
+        }
+    }
+
+    /// 下部: シークバー + 再生モードトグル
+    private func bottomControls(compact: Bool) -> some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 10) {
+                Text((isScrubbing ? scrubTarget : playerManager.currentTime).mediaDurationText)
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .frame(minWidth: 40, alignment: .leading)
+
+                seekBar
+
+                Text(playerManager.duration.mediaDurationText)
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.75))
+                    .frame(minWidth: 40, alignment: .trailing)
+            }
+
+            HStack(spacing: compact ? 18 : 26) {
+                controlToggle(icon: "shuffle", active: isShuffle) { isShuffle.toggle(); startHideTimer() }
+                controlToggle(icon: repeatMode == .one ? "repeat.1" : "repeat", active: repeatMode != .off) { cycleRepeatMode(); startHideTimer() }
+                controlToggle(icon: "infinity", active: isContinuous) { isContinuous.toggle(); startHideTimer() }
+                Menu {
+                    Button(isSlideshow ? "スライドショーを停止" : "スライドショーを開始") { toggleSlideshow(); startHideTimer() }
+                    Picker("1本あたりの秒数", selection: $slideshowClipDuration) {
+                        Text("5秒").tag(5.0)
+                        Text("10秒").tag(10.0)
+                        Text("15秒").tag(15.0)
+                        Text("30秒").tag(30.0)
+                        Text("60秒").tag(60.0)
+                    }
+                } label: {
+                    Image(systemName: "play.square.stack")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(isSlideshow ? Color.appDarkBackground : .white.opacity(0.75))
+                        .frame(width: 40, height: 40)
+                        .background(isSlideshow ? AnyShapeStyle(AppTheme.goldGradient) : AnyShapeStyle(.white.opacity(0.12)))
+                        .clipShape(Circle())
+                        .shadow(color: isSlideshow ? Color.appGold.opacity(0.4) : .clear, radius: 6)
+                }
+            }
+        }
+        .padding(.horizontal, compact ? 14 : 20)
+        .padding(.top, compact ? 16 : 50)
+        .padding(.bottom, compact ? 12 : 46)
+        .background(
+            LinearGradient(colors: [.clear, .black.opacity(0.45), .black.opacity(0.8)], startPoint: .top, endPoint: .bottom)
+                .allowsHitTesting(false)
+        )
+    }
+
+    /// ゴールドのカスタムシークバー（ドラッグでスクラブ）
+    private var seekBar: some View {
+        GeometryReader { geo in
+            let duration = max(playerManager.duration, 0.01)
+            let progress = min(max((isScrubbing ? scrubTarget : playerManager.currentTime) / duration, 0), 1)
+            let barHeight: CGFloat = isScrubbing ? 9 : 5
+            let knobSize: CGFloat = isScrubbing ? 19 : 13
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.25))
+                    .frame(height: barHeight)
+
+                Capsule()
+                    .fill(AppTheme.goldGradient)
+                    .frame(width: max(geo.size.width * progress, barHeight), height: barHeight)
+                    .shadow(color: Color.appGold.opacity(0.5), radius: isScrubbing ? 6 : 3)
+
+                Circle()
+                    .fill(.white)
+                    .frame(width: knobSize, height: knobSize)
+                    .shadow(color: .black.opacity(0.4), radius: 3, x: 0, y: 1)
+                    .offset(x: geo.size.width * progress - knobSize / 2)
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        isScrubbing = true
+                        hideControlsTask?.cancel()
+                        let ratio = min(max(0, value.location.x / geo.size.width), 1)
+                        scrubTarget = Double(ratio) * playerManager.duration
+                    }
+                    .onEnded { _ in
+                        playerManager.seek(toSeconds: scrubTarget)
+                        Haptics.soft()
+                        isScrubbing = false
+                        startHideTimer()
+                    }
+            )
+        }
+        .frame(height: 30)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isScrubbing)
+    }
+
+    /// タップゾーン: 中央シングルタップで表示切替、左右ダブルタップで±10秒
+    private var tapZones: some View {
+        HStack(spacing: 0) {
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { doubleTapSeek(forward: false) }
+                .onTapGesture { toggleControlsVisibility() }
+
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { toggleControlsVisibility() }
+
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { doubleTapSeek(forward: true) }
+                .onTapGesture { toggleControlsVisibility() }
+        }
+    }
+
+    /// ±10秒シーク時のフィードバック表示
+    @ViewBuilder
+    private var seekFeedbackOverlay: some View {
+        if let fb = seekFeedback {
+            HStack {
+                if fb.forward { Spacer() }
+                VStack(spacing: 5) {
+                    Image(systemName: fb.forward ? "goforward.10" : "gobackward.10")
+                        .font(.system(size: 34, weight: .semibold))
+                    Text(fb.forward ? "+10秒" : "−10秒")
+                        .font(.caption2.weight(.bold))
+                }
+                .foregroundStyle(.white)
+                .frame(width: 96, height: 96)
+                .background(.black.opacity(0.35))
+                .clipShape(Circle())
+                .padding(.horizontal, 44)
+                if !fb.forward { Spacer() }
+            }
+            .allowsHitTesting(false)
+            .transition(.opacity.combined(with: .scale(scale: 0.75)))
+            .id(fb.id)
+        }
     }
 
     private func controlToggle(icon: String, active: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button(action: { Haptics.soft(); action() }) {
             Image(systemName: icon)
-                .foregroundColor(active ? accentGlowColor : .white.opacity(0.6))
-                .padding(8)
-                .background(active ? accentGlowColor.opacity(0.18) : Color.clear)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(active ? Color.appDarkBackground : .white.opacity(0.75))
+                .frame(width: 40, height: 40)
+                .background(active ? AnyShapeStyle(AppTheme.goldGradient) : AnyShapeStyle(.white.opacity(0.12)))
                 .clipShape(Circle())
+                .shadow(color: active ? Color.appGold.opacity(0.4) : .clear, radius: 6)
+        }
+    }
+
+    // MARK: - コントロール操作ヘルパー
+
+    private func toggleControlsVisibility() {
+        withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
+        if showControls { startHideTimer() } else { hideControlsTask?.cancel() }
+    }
+
+    /// ±10秒シーク（コントロール表示状態は変えない）
+    private func quickSeek(forward: Bool) {
+        let delta = CMTime(seconds: forward ? 10 : -10, preferredTimescale: 600)
+        let newTime = CMTimeAdd(playerManager.player.currentTime(), delta)
+        playerManager.player.seek(to: newTime, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    private func doubleTapSeek(forward: Bool) {
+        Haptics.light()
+        quickSeek(forward: forward)
+        let fb = SeekFeedback(forward: forward, id: UUID())
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { seekFeedback = fb }
+        Task {
+            try? await Task.sleep(nanoseconds: 650_000_000)
+            await MainActor.run {
+                if seekFeedback?.id == fb.id {
+                    withAnimation(.easeOut(duration: 0.25)) { seekFeedback = nil }
+                }
+            }
         }
     }
 
@@ -1304,28 +2013,75 @@ private struct RemotePhotoViewer: View {
             HStack {
                 if currentIndex > 0 {
                     Button(action: { changePhoto(offset: -1) }) {
-                        Image(systemName: "chevron.left").font(.system(size: 40)).foregroundColor(.white.opacity(0.3)).padding()
+                        Image(systemName: "chevron.left")
+                            .font(.title3.weight(.bold))
+                            .foregroundColor(.white.opacity(0.85))
+                            .frame(width: 40, height: 40)
+                            .background(.white.opacity(0.12))
+                            .clipShape(Circle())
+                            .padding(.leading, 12)
                     }.buttonStyle(PlainButtonStyle())
                 }
                 Spacer()
                 if currentIndex < photos.count - 1 {
                     Button(action: { changePhoto(offset: 1) }) {
-                        Image(systemName: "chevron.right").font(.system(size: 40)).foregroundColor(.white.opacity(0.3)).padding()
+                        Image(systemName: "chevron.right")
+                            .font(.title3.weight(.bold))
+                            .foregroundColor(.white.opacity(0.85))
+                            .frame(width: 40, height: 40)
+                            .background(.white.opacity(0.12))
+                            .clipShape(Circle())
+                            .padding(.trailing, 12)
                     }.buttonStyle(PlainButtonStyle())
                 }
             }
-            
-            VStack { 
-                HStack { 
+            .opacity(scale > 1 ? 0 : 1)
+
+            // 上部バー: 閉じる / ページカウンタ / 保存
+            VStack {
+                HStack {
+                    Button(action: { isPresented = false }) {
+                        Image(systemName: "xmark")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundColor(.white)
+                            .frame(width: 36, height: 36)
+                            .background(.white.opacity(0.12))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(PlainButtonStyle())
+
                     Spacer()
-                    Button(action: { isPresented = false }) { 
-                        Image(systemName: "xmark.circle.fill").font(.largeTitle).foregroundColor(.white.opacity(0.8)).padding() 
+
+                    if photos.count > 1 {
+                        Text("\(currentIndex + 1) / \(photos.count)")
+                            .font(.caption.weight(.bold).monospacedDigit())
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(.white.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+
+                    Spacer()
+
+                    Button(action: {
+                        downloadManager?.startDownload(url: url, filename: currentPhoto.filename, isPhoto: true)
+                        Haptics.light()
+                    }) {
+                        Image(systemName: "square.and.arrow.down")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundColor(.white)
+                            .frame(width: 36, height: 36)
+                            .background(.white.opacity(0.12))
+                            .clipShape(Circle())
                     }
                     .buttonStyle(PlainButtonStyle())
                 }
-                Spacer() 
-            } 
-            
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                Spacer()
+            }
+
             Group {
                 Button("") { changePhoto(offset: -1) }.keyboardShortcut(.leftArrow, modifiers: [])
                 Button("") { changePhoto(offset: 1) }.keyboardShortcut(.rightArrow, modifiers: [])
@@ -1393,12 +2149,13 @@ private struct VideoInfoSheetView: View {
                             Text("写真アプリに保存").fontWeight(.bold)
                         }
                         .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(LinearGradient(colors: [accentColor, accentColor.opacity(0.8)], startPoint: .leading, endPoint: .trailing))
-                        .foregroundColor(Color.appDarkSurface)
-                        .cornerRadius(16)
-                        .shadow(color: accentColor.opacity(0.2), radius: 8, x: 0, y: 4)
+                        .padding(.vertical, 15)
+                        .background(AppTheme.goldGradient)
+                        .foregroundColor(Color.appDarkBackground)
+                        .clipShape(Capsule())
+                        .shadow(color: accentColor.opacity(0.3), radius: 10, x: 0, y: 4)
                     }
+                    .buttonStyle(PressableCardStyle(scale: 0.97))
                     .padding(.horizontal, 20)
 
                     VStack(alignment: .leading, spacing: 16) {

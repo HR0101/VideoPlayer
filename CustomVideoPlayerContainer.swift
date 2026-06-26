@@ -1,5 +1,31 @@
 import SwiftUI
 import AVKit
+import UIKit
+
+// MARK: - AVPlayerLayer の素のサーフェス（OS標準コントロールなし）
+// カスタムコントロールを重ねるためのプレイヤー表示ビュー
+struct PlayerLayerView: UIViewRepresentable {
+    let player: AVPlayer
+
+    final class PlayerContainerUIView: UIView {
+        override static var layerClass: AnyClass { AVPlayerLayer.self }
+        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    }
+
+    func makeUIView(context: Context) -> PlayerContainerUIView {
+        let view = PlayerContainerUIView()
+        view.backgroundColor = .clear
+        view.playerLayer.player = player
+        view.playerLayer.videoGravity = .resizeAspect
+        return view
+    }
+
+    func updateUIView(_ uiView: PlayerContainerUIView, context: Context) {
+        if uiView.playerLayer.player !== player {
+            uiView.playerLayer.player = player
+        }
+    }
+}
 
 struct CustomVideoPlayerContainer: View {
     let videoURL: URL

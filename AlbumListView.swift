@@ -1,9 +1,10 @@
 import SwiftUI
+import MediaServerKit
 
 struct AlbumListView: View {
     @StateObject private var videoManager = VideoManager()
     @EnvironmentObject var serverBrowser: ServerBrowser
-    
+
     @StateObject private var serverManager = ServerManager()
     @ObservedObject private var favorites = FavoritesManager.shared
 
@@ -22,55 +23,62 @@ struct AlbumListView: View {
 
     @State private var showShutdownConfirm = false
 
+    /// ローカルアルバムの動画本数キャッシュ（カバー取得時に更新）
+    @State private var localCounts: [String: Int] = [:]
+
     @AppStorage("isListViewMode") private var isListViewMode = false
-    
+
     private let specialAlbums: [(type: AlbumType, name: String, icon: String)] = [
         (.all, "すべてのビデオ", "square.stack.fill"),
         (.trash, "ごみ箱", "trash.fill")
     ]
-    
-    private let primaryDarkColor = Color.appDarkBackground
-    private let accentGlowColor  = Color.appGold
 
-    private var backgroundGradient: some View {
-        LinearGradient(
-            colors: [Color.appDarkBackground, Color.appDarkSurface],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-        .ignoresSafeArea()
-    }
-    
-    private var columns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 16), count: 2)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private func albumColumns(for width: CGFloat) -> [GridItem] {
+        let count: Int
+        if horizontalSizeClass == .regular {
+            if width > 1100 { count = 5 }
+            else if width > 800 { count = 4 }
+            else { count = 3 }
+        } else {
+            count = 2
+        }
+        return Array(repeating: GridItem(.flexible(), spacing: 16), count: count)
     }
 
     var body: some View {
         NavigationStack {
             ZStack {
-                backgroundGradient
-                
-                ScrollView {
-                    VStack(spacing: 32) {
-                        localSection
-                        serverSection
+                AppBackground()
+
+                GeometryReader { geo in
+                    ScrollView {
+                        VStack(spacing: 36) {
+                            localSection(width: geo.size.width)
+                            serverSection(width: geo.size.width)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 24)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 24)
                 }
             }
             .navigationTitle("アルバム")
             .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbarBackground(primaryDarkColor, for: .navigationBar)
+            .toolbarBackground(Color.appDarkBackground, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 16) {
-                        Button(action: { withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { isListViewMode.toggle() } }) {
+                        Button(action: {
+                            Haptics.light()
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { isListViewMode.toggle() }
+                        }) {
                             Image(systemName: isListViewMode ? "square.grid.2x2" : "list.bullet")
-                                .foregroundColor(accentGlowColor)
+                                .foregroundStyle(Color.appGold)
+                                .contentTransition(.symbolEffect(.replace))
                         }
-                        
+
                         Menu {
                             Button("ローカルに作成") { isShowingCreateAlbumAlert = true }
                             if serverManager.server?.address != nil {
@@ -78,7 +86,7 @@ struct AlbumListView: View {
                             }
                         } label: {
                             Image(systemName: "plus")
-                                .foregroundColor(accentGlowColor)
+                                .foregroundStyle(Color.appGold)
                         }
                     }
                 }
@@ -130,18 +138,18 @@ struct AlbumListView: View {
             .onDisappear {
                 serverBrowser.stopBrowsing()
             }
-            .onChange(of: serverBrowser.discoveredServers) { servers in
+            .onChange(of: serverBrowser.discoveredServers) { _, servers in
                 serverManager.updateServer(servers.first)
             }
         }
     }
-    
+
     // MARK: - Local Section
     @ViewBuilder
-    private var localSection: some View {
+    private func localSection(width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            sectionHeader(title: "ローカルライブラリ")
-            
+            SectionHeaderView(title: "ローカルライブラリ", icon: "iphone")
+
             if isListViewMode {
                 LazyVStack(spacing: 12) {
                     ForEach(specialAlbums, id: \.type) { album in
@@ -152,7 +160,7 @@ struct AlbumListView: View {
                     }
                 }
             } else {
-                LazyVGrid(columns: columns, spacing: 16) {
+                LazyVGrid(columns: albumColumns(for: width), spacing: 16) {
                     ForEach(specialAlbums, id: \.type) { album in
                         localGridCell(type: album.type, name: album.name, icon: album.icon)
                     }
@@ -163,29 +171,42 @@ struct AlbumListView: View {
             }
         }
     }
-    
+
     // MARK: - Server Section
     @ViewBuilder
-    private var serverSection: some View {
+    private func serverSection(width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             if let server = serverManager.server, let address = server.address {
-                serverSectionHeader(title: server.name)
+                SectionHeaderView(
+                    title: server.name,
+                    icon: "macmini.fill",
+                    accessory: AnyView(
+                        HStack(spacing: 14) {
+                            if !serverManager.authRequired { LiveIndicator() }
+                            Button(action: { showShutdownConfirm = true }) {
+                                Image(systemName: "power.circle.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(.red.opacity(0.85))
+                            }
+                        }
+                    )
+                )
 
                 if serverManager.authRequired {
                     serverLockCard
                 } else if serverManager.isLoading {
-                    ProgressView().tint(accentGlowColor).frame(maxWidth: .infinity, alignment: .center).padding()
+                    loadingSkeleton(width: width)
                 } else if let errorMessage = serverManager.errorMessage {
-                    Text(errorMessage).foregroundColor(.gray).font(.subheadline).padding()
+                    statusCard(icon: "exclamationmark.triangle.fill", title: "接続エラー", message: errorMessage)
                 } else {
                     let libraryAlbums = serverManager.albums.filter { $0.name == "ALL VIDEOS" || $0.name == "ALL PHOTOS" }
                     let videoAlbums = serverManager.albums.filter { ($0.type == "video" || $0.type == nil) && $0.name != "ALL VIDEOS" && $0.name != "ALL PHOTOS" }
                     let photoAlbums = serverManager.albums.filter { $0.type == "photo" && $0.name != "ALL VIDEOS" && $0.name != "ALL PHOTOS" }
-                    
+
                     if isListViewMode {
                         LazyVStack(spacing: 12) {
                             virtualListRow(title: "お気に入り", icon: "heart.fill", albumID: "FAVORITES", address: address, count: favorites.ids.count, tint: .pink)
-                            virtualListRow(title: "再生履歴", icon: "clock.arrow.circlepath", albumID: "HISTORY", address: address, count: nil, tint: accentGlowColor)
+                            virtualListRow(title: "再生履歴", icon: "clock.arrow.circlepath", albumID: "HISTORY", address: address, count: nil, tint: .appGold)
                             ForEach(libraryAlbums) { album in
                                 let isPhoto = album.name == "ALL PHOTOS"
                                 serverListRow(album: album, address: address, icon: isPhoto ? "photo.on.rectangle.fill" : "film.stack.fill")
@@ -198,9 +219,9 @@ struct AlbumListView: View {
                             }
                         }
                     } else {
-                        LazyVGrid(columns: columns, spacing: 16) {
+                        LazyVGrid(columns: albumColumns(for: width), spacing: 16) {
                             virtualGridCell(title: "お気に入り", icon: "heart.fill", albumID: "FAVORITES", address: address, count: favorites.ids.count, tint: .pink)
-                            virtualGridCell(title: "再生履歴", icon: "clock.arrow.circlepath", albumID: "HISTORY", address: address, count: nil, tint: accentGlowColor)
+                            virtualGridCell(title: "再生履歴", icon: "clock.arrow.circlepath", albumID: "HISTORY", address: address, count: nil, tint: .appGold)
                             ForEach(libraryAlbums) { album in
                                 let isPhoto = album.name == "ALL PHOTOS"
                                 serverGridCell(album: album, address: address, icon: isPhoto ? "photo.on.rectangle.fill" : "film.stack.fill")
@@ -215,100 +236,128 @@ struct AlbumListView: View {
                     }
                 }
             } else {
-                sectionHeader(title: "Mac サーバー")
-                HStack {
-                    Image(systemName: "wifi.slash")
-                    Text("同じWi-Fi内でサーバーが見つかりません")
-                }
-                .foregroundColor(.white.opacity(0.5))
-                .font(.subheadline)
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(.ultraThinMaterial)
-                .cornerRadius(16)
+                SectionHeaderView(title: "Mac サーバー", icon: "macmini.fill")
+                serverSearchingCard
             }
         }
     }
-    
+
+    // MARK: - サーバー探索中カード（レーダー風）
+    private var serverSearchingCard: some View {
+        VStack(spacing: 20) {
+            RadarPulseView()
+                .frame(height: 110)
+
+            VStack(spacing: 6) {
+                Text("サーバーを探しています…")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+                Text("同じWi-Fi内で AllServerForMac を起動すると\n自動的にここへ表示されます")
+                    .font(.caption)
+                    .foregroundStyle(Color.appTextSecondary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(4)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 30)
+        .glassCard()
+    }
+
     // MARK: - サーバーロックカード (PIN認証要求時)
     private var serverLockCard: some View {
         VStack(spacing: 16) {
             Image(systemName: "lock.shield.fill")
                 .font(.system(size: 44, weight: .light))
-                .foregroundColor(accentGlowColor)
+                .foregroundStyle(AppTheme.goldGradient)
+                .symbolEffect(.pulse)
+                .shadow(color: Color.appGold.opacity(0.4), radius: 12)
+
             Text("このサーバーは保護されています")
                 .font(.subheadline.weight(.bold))
-                .foregroundColor(.white)
+                .foregroundStyle(.white)
             Text("接続するにはPINが必要です。")
                 .font(.caption)
-                .foregroundColor(.white.opacity(0.6))
-            Button(action: { isShowingPINPrompt = true }) {
+                .foregroundStyle(Color.appTextSecondary)
+
+            Button(action: { Haptics.light(); isShowingPINPrompt = true }) {
                 Text("PINを入力")
                     .font(.subheadline.weight(.bold))
-                    .foregroundColor(primaryDarkColor)
-                    .padding(.horizontal, 24)
+                    .foregroundStyle(Color.appDarkBackground)
+                    .padding(.horizontal, 28)
                     .padding(.vertical, 12)
-                    .background(accentGlowColor)
-                    .cornerRadius(14)
+                    .background(AppTheme.goldGradient)
+                    .clipShape(Capsule())
+                    .shadow(color: Color.appGold.opacity(0.35), radius: 10, x: 0, y: 4)
             }
+            .buttonStyle(PressableCardStyle())
+            .padding(.top, 4)
         }
         .frame(maxWidth: .infinity)
         .padding(28)
-        .background(.ultraThinMaterial)
-        .cornerRadius(20)
-        .overlay(RoundedRectangle(cornerRadius: 20).stroke(accentGlowColor.opacity(0.3), lineWidth: 1))
+        .glassCard()
     }
 
-    private func sectionHeader(title: String) -> some View {
-        Text(title)
-            .font(.title3.weight(.bold))
-            .foregroundColor(accentGlowColor)
-            .tracking(1.0)
-            .padding(.bottom, 4)
-            .padding(.leading, 4)
-    }
-
-    private func serverSectionHeader(title: String) -> some View {
-        HStack {
+    // MARK: - 状態表示カード
+    private func statusCard(icon: String, title: String, message: String) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundStyle(Color.appTextSecondary)
             Text(title)
-                .font(.title3.weight(.bold))
-                .foregroundColor(accentGlowColor)
-                .tracking(1.0)
-            Spacer()
-            Button(action: { showShutdownConfirm = true }) {
-                Image(systemName: "power.circle.fill")
-                    .font(.title2)
-                    .foregroundColor(.red.opacity(0.85))
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(.white)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(Color.appTextSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(24)
+        .glassCard()
+    }
+
+    // MARK: - スケルトンローディング
+    private func loadingSkeleton(width: CGFloat) -> some View {
+        LazyVGrid(columns: albumColumns(for: width), spacing: 16) {
+            ForEach(0..<4, id: \.self) { _ in
+                SkeletonCard()
+                    .aspectRatio(1, contentMode: .fit)
             }
         }
-        .padding(.bottom, 4)
-        .padding(.horizontal, 4)
     }
-    
+
     // MARK: - ローカル用コンポーネント
     private func localListRow(type: AlbumType, name: String, icon: String) -> some View {
         NavigationLink(destination: VideoGridView(albumType: type, albumName: name, videoManager: videoManager)) {
             HStack(spacing: 16) {
-                LocalAlbumCoverView(albumType: type, videoManager: videoManager, icon: icon, color: type == .trash ? .gray : accentGlowColor)
-                    .frame(width: 72, height: 72)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 0.5))
-                
-                Text(name)
-                    .font(.subheadline.weight(.bold))
-                    .foregroundColor(.white)
-                
+                LocalAlbumCoverView(albumType: type, videoManager: videoManager, icon: icon,
+                                    color: type == .trash ? .gray : .appGold,
+                                    onCount: { localCounts[type.id] = $0 })
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusS, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: AppTheme.radiusS, style: .continuous).strokeBorder(AppTheme.cardStroke, lineWidth: 0.5))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(name)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.white)
+                    if let count = localCounts[type.id] {
+                        Text("\(count) 本")
+                            .font(.caption.weight(.medium).monospacedDigit())
+                            .foregroundStyle(Color.appGold.opacity(0.85))
+                    }
+                }
+
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(Color.white.opacity(0.3))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.appTextTertiary)
             }
             .padding(12)
-            .background(.ultraThinMaterial)
-            .cornerRadius(20)
-            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
-            .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
+            .glassCard(cornerRadius: AppTheme.radiusM)
         }
+        .buttonStyle(PressableCardStyle(scale: 0.98))
         .contextMenu {
             if case .user(let albumName) = type {
                 Button(role: .destructive) {
@@ -318,24 +367,34 @@ struct AlbumListView: View {
             }
         }
     }
-    
+
     private func localGridCell(type: AlbumType, name: String, icon: String) -> some View {
         NavigationLink(destination: VideoGridView(albumType: type, albumName: name, videoManager: videoManager)) {
-            VStack(alignment: .leading, spacing: 10) {
-                LocalAlbumCoverView(albumType: type, videoManager: videoManager, icon: icon, color: type == .trash ? .gray : accentGlowColor)
-                    .aspectRatio(1, contentMode: .fill)
-                    .frame(minWidth: 0, maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 20))
-                    .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.1), lineWidth: 0.5))
-                    .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
-                
-                Text(name)
-                    .font(.subheadline.weight(.bold))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                    .padding(.leading, 4)
-            }
+            LocalAlbumCoverView(albumType: type, videoManager: videoManager, icon: icon,
+                                color: type == .trash ? .gray : .appGold,
+                                onCount: { localCounts[type.id] = $0 })
+                .aspectRatio(1, contentMode: .fill)
+                .frame(minWidth: 0, maxWidth: .infinity)
+                .overlay(AppTheme.bottomScrim)
+                .overlay(alignment: .bottomLeading) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(name)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                        if let count = localCounts[type.id] {
+                            Text("\(count) 本")
+                                .font(.caption2.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(Color.appGold)
+                        }
+                    }
+                    .padding(12)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous).strokeBorder(AppTheme.cardStroke, lineWidth: 1))
+                .shadow(color: .black.opacity(0.35), radius: 10, x: 0, y: 5)
         }
+        .buttonStyle(PressableCardStyle())
         .contextMenu {
             if case .user(let albumName) = type {
                 Button(role: .destructive) {
@@ -345,35 +404,33 @@ struct AlbumListView: View {
             }
         }
     }
-    
+
     // MARK: - サーバー用コンポーネント
     private func serverListRow(album: RemoteAlbumInfo, address: String, icon: String) -> some View {
         NavigationLink(destination: RemoteVideoListView(serverName: album.name, serverAddress: address, albumID: album.id, allServerAlbums: serverManager.albums)) {
             HStack(spacing: 16) {
-                ServerAlbumCoverView(serverAddress: address, albumID: album.id, icon: icon, color: accentGlowColor)
-                    .frame(width: 72, height: 72)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 0.5))
-                
+                ServerAlbumCoverView(serverAddress: address, albumID: album.id, icon: icon, color: .appGold)
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusS, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: AppTheme.radiusS, style: .continuous).strokeBorder(AppTheme.cardStroke, lineWidth: 0.5))
+
                 VStack(alignment: .leading, spacing: 4) {
                     Text(album.name)
                         .font(.subheadline.weight(.bold))
-                        .foregroundColor(.white)
+                        .foregroundStyle(.white)
                     Text("\(album.videoCount) 項目")
-                        .font(.caption.weight(.medium))
-                        .foregroundColor(accentGlowColor.opacity(0.8))
+                        .font(.caption.weight(.medium).monospacedDigit())
+                        .foregroundStyle(Color.appGold.opacity(0.85))
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(Color.white.opacity(0.3))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.appTextTertiary)
             }
             .padding(12)
-            .background(.ultraThinMaterial)
-            .cornerRadius(20)
-            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
-            .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
+            .glassCard(cornerRadius: AppTheme.radiusM)
         }
+        .buttonStyle(PressableCardStyle(scale: 0.98))
         .contextMenu {
             if album.name != "ALL VIDEOS" && album.name != "ALL PHOTOS" {
                 Button(role: .destructive) {
@@ -382,34 +439,29 @@ struct AlbumListView: View {
             }
         }
     }
-    
+
     private func serverGridCell(album: RemoteAlbumInfo, address: String, icon: String) -> some View {
         NavigationLink(destination: RemoteVideoListView(serverName: album.name, serverAddress: address, albumID: album.id, allServerAlbums: serverManager.albums)) {
-            VStack(alignment: .leading, spacing: 10) {
-                ServerAlbumCoverView(serverAddress: address, albumID: album.id, icon: icon, color: accentGlowColor)
-                    .aspectRatio(1, contentMode: .fill)
-                    .frame(minWidth: 0, maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 20))
-                    .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.1), lineWidth: 0.5))
-                    .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
-                
-                HStack {
+            ServerAlbumCoverView(serverAddress: address, albumID: album.id, icon: icon, color: .appGold)
+                .aspectRatio(1, contentMode: .fill)
+                .frame(minWidth: 0, maxWidth: .infinity)
+                .overlay(AppTheme.bottomScrim)
+                .overlay(alignment: .bottomLeading) {
                     Text(album.name)
                         .font(.subheadline.weight(.bold))
-                        .foregroundColor(.white)
+                        .foregroundStyle(.white)
                         .lineLimit(1)
-                    Spacer()
-                    Text("\(album.videoCount)")
-                        .font(.caption2.weight(.bold))
-                        .foregroundColor(primaryDarkColor)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(accentGlowColor)
-                        .cornerRadius(6)
+                        .padding(12)
                 }
-                .padding(.horizontal, 4)
-            }
+                .overlay(alignment: .topTrailing) {
+                    CountBadge(count: album.videoCount)
+                        .padding(10)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous).strokeBorder(AppTheme.cardStroke, lineWidth: 1))
+                .shadow(color: .black.opacity(0.35), radius: 10, x: 0, y: 5)
         }
+        .buttonStyle(PressableCardStyle())
         .contextMenu {
             if album.name != "ALL VIDEOS" && album.name != "ALL PHOTOS" {
                 Button(role: .destructive) {
@@ -422,37 +474,34 @@ struct AlbumListView: View {
     // MARK: - 仮想アルバム (お気に入り・再生履歴)
     private func virtualGridCell(title: String, icon: String, albumID: String, address: String, count: Int?, tint: Color) -> some View {
         NavigationLink(destination: RemoteVideoListView(serverName: title, serverAddress: address, albumID: albumID, allServerAlbums: serverManager.albums)) {
-            VStack(alignment: .leading, spacing: 10) {
-                ZStack {
-                    LinearGradient(colors: [tint.opacity(0.35), Color.appDarkSurface], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    Image(systemName: icon)
-                        .font(.system(size: 44, weight: .light))
-                        .foregroundColor(tint)
-                }
-                .aspectRatio(1, contentMode: .fill)
-                .frame(minWidth: 0, maxWidth: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 20))
-                .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.1), lineWidth: 0.5))
-                .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
-
-                HStack {
-                    Text(title)
-                        .font(.subheadline.weight(.bold))
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                    Spacer()
-                    if let count = count {
-                        Text("\(count)")
-                            .font(.caption2.weight(.bold))
-                            .foregroundColor(primaryDarkColor)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(tint)
-                            .cornerRadius(6)
-                    }
-                }
-                .padding(.horizontal, 4)
+            ZStack {
+                LinearGradient(colors: [tint.opacity(0.35), Color.appDarkSurface], startPoint: .topLeading, endPoint: .bottomTrailing)
+                Image(systemName: icon)
+                    .font(.system(size: 44, weight: .light))
+                    .foregroundStyle(tint)
+                    .shadow(color: tint.opacity(0.5), radius: 12)
             }
+            .aspectRatio(1, contentMode: .fill)
+            .frame(minWidth: 0, maxWidth: .infinity)
+            .overlay(AppTheme.bottomScrim)
+            .overlay(alignment: .bottomLeading) {
+                Text(title)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .padding(12)
+            }
+            .overlay(alignment: .topTrailing) {
+                if let count = count {
+                    CountBadge(count: count, tint: LinearGradient(colors: [tint, tint.opacity(0.75)], startPoint: .top, endPoint: .bottom))
+                        .padding(10)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous).strokeBorder(AppTheme.cardStroke, lineWidth: 1))
+            .shadow(color: .black.opacity(0.35), radius: 10, x: 0, y: 5)
         }
+        .buttonStyle(PressableCardStyle())
     }
 
     private func virtualListRow(title: String, icon: String, albumID: String, address: String, count: Int?, tint: Color) -> some View {
@@ -460,33 +509,33 @@ struct AlbumListView: View {
             HStack(spacing: 16) {
                 ZStack {
                     LinearGradient(colors: [tint.opacity(0.35), Color.appDarkSurface], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    Image(systemName: icon).font(.system(size: 28, weight: .light)).foregroundColor(tint)
+                    Image(systemName: icon)
+                        .font(.system(size: 26, weight: .light))
+                        .foregroundStyle(tint)
                 }
-                .frame(width: 72, height: 72)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 0.5))
+                .frame(width: 64, height: 64)
+                .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusS, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: AppTheme.radiusS, style: .continuous).strokeBorder(AppTheme.cardStroke, lineWidth: 0.5))
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
                         .font(.subheadline.weight(.bold))
-                        .foregroundColor(.white)
+                        .foregroundStyle(.white)
                     if let count = count {
                         Text("\(count) 項目")
-                            .font(.caption.weight(.medium))
-                            .foregroundColor(tint.opacity(0.9))
+                            .font(.caption.weight(.medium).monospacedDigit())
+                            .foregroundStyle(tint.opacity(0.9))
                     }
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(Color.white.opacity(0.3))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.appTextTertiary)
             }
             .padding(12)
-            .background(.ultraThinMaterial)
-            .cornerRadius(20)
-            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.08), lineWidth: 0.5))
-            .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
+            .glassCard(cornerRadius: AppTheme.radiusM)
         }
+        .buttonStyle(PressableCardStyle(scale: 0.98))
     }
 
     // MARK: - Actions
@@ -525,6 +574,39 @@ struct AlbumListView: View {
     }
 }
 
+// MARK: - レーダー風パルスアニメーション
+struct RadarPulseView: View {
+    @State private var animate = false
+
+    var body: some View {
+        ZStack {
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .stroke(Color.appGold.opacity(0.5), lineWidth: 1.5)
+                    .frame(width: 50, height: 50)
+                    .scaleEffect(animate ? 2.4 : 1.0)
+                    .opacity(animate ? 0 : 0.7)
+                    .animation(
+                        .easeOut(duration: 2.2)
+                        .repeatForever(autoreverses: false)
+                        .delay(Double(i) * 0.7),
+                        value: animate
+                    )
+            }
+
+            Image(systemName: "wifi")
+                .font(.system(size: 26, weight: .medium))
+                .foregroundStyle(AppTheme.goldGradient)
+                .symbolEffect(.variableColor.iterative, options: .repeating)
+                .frame(width: 56, height: 56)
+                .background(Color.appDarkSurface.opacity(0.8))
+                .clipShape(Circle())
+                .overlay(Circle().strokeBorder(Color.appGold.opacity(0.3), lineWidth: 1))
+        }
+        .onAppear { animate = true }
+    }
+}
+
 // MARK: - カバー表示用コンポーネント
 
 struct LocalAlbumCoverView: View {
@@ -532,22 +614,23 @@ struct LocalAlbumCoverView: View {
     let videoManager: VideoManager
     let icon: String
     let color: Color
-    
+    var onCount: ((Int) -> Void)? = nil
+
     @State private var coverURL: URL?
     @State private var hasFetched = false
-    
+
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                Color(red: 0.1, green: 0.1, blue: 0.14).ignoresSafeArea()
-                
+                Color.appDarkSurface.ignoresSafeArea()
+
                 if let url = coverURL {
                     LocalVideoThumbnailView(url: url)
                         .allowsHitTesting(false) // タップ判定を親に譲る
                 } else {
                     Image(systemName: icon)
-                        .font(.system(size: proxy.size.width * 0.4, weight: .light))
-                        .foregroundColor(color.opacity(0.5))
+                        .font(.system(size: proxy.size.width * 0.34, weight: .light))
+                        .foregroundStyle(color.opacity(0.5))
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
@@ -558,6 +641,7 @@ struct LocalAlbumCoverView: View {
                 Task {
                     let urls = await videoManager.fetchVideos(for: albumType)
                     coverURL = urls.first
+                    onCount?(urls.count)
                 }
             }
         }
@@ -569,28 +653,29 @@ struct ServerAlbumCoverView: View {
     let albumID: String
     let icon: String
     let color: Color
-    
+
     @State private var coverVideoID: String?
     @State private var hasFetched = false
-    
+
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                Color(red: 0.1, green: 0.1, blue: 0.14).ignoresSafeArea()
-                
+                Color.appDarkSurface.ignoresSafeArea()
+
                 if let vid = coverVideoID {
                     AsyncImage(url: ServerAuth.mediaURL(address: serverAddress, path: "/thumbnail/\(vid)")) { phase in
                         switch phase {
                         case .success(let image):
                             image.resizable().aspectRatio(contentMode: .fill)
+                                .transition(.opacity)
                         case .failure:
-                            fallbackIcon(size: proxy.size.width * 0.4)
+                            fallbackIcon(size: proxy.size.width * 0.34)
                         default:
-                            ProgressView().tint(color)
+                            SkeletonCard(cornerRadius: 0)
                         }
                     }
                 } else {
-                    fallbackIcon(size: proxy.size.width * 0.4)
+                    fallbackIcon(size: proxy.size.width * 0.34)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
@@ -602,13 +687,13 @@ struct ServerAlbumCoverView: View {
             }
         }
     }
-    
+
     private func fallbackIcon(size: CGFloat) -> some View {
         Image(systemName: icon)
             .font(.system(size: size, weight: .light))
-            .foregroundColor(color.opacity(0.5))
+            .foregroundStyle(color.opacity(0.5))
     }
-    
+
     private func fetchCoverID() async {
         guard let url = URL(string: "\(serverAddress)/albums/\(albumID)/videos") else { return }
         do {

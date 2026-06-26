@@ -32,17 +32,27 @@ struct DownloadStatusOverlay: View {
     var body: some View {
         VStack(spacing: 10) {
             if let errorMsg = downloadManager.errorMessage {
-                HStack {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.white)
-                    Text(errorMsg).font(.caption).foregroundColor(.white).lineLimit(2)
+                HStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                    Text(errorMsg)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
                     Spacer()
-                    Button(action: { downloadManager.errorMessage = nil }) {
-                        Image(systemName: "xmark").foregroundColor(.white.opacity(0.8))
+                    Button(action: { withAnimation { downloadManager.errorMessage = nil } }) {
+                        Image(systemName: "xmark")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white.opacity(0.7))
                     }
                 }
-                .padding()
-                .background(Color.red.opacity(0.9))
-                .cornerRadius(12)
+                .padding(14)
+                .glassCard(cornerRadius: AppTheme.radiusM)
+                .overlay(
+                    RoundedRectangle(cornerRadius: AppTheme.radiusM, style: .continuous)
+                        .strokeBorder(Color.red.opacity(0.5), lineWidth: 1)
+                )
+                .environment(\.colorScheme, .dark)
                 .padding(.horizontal)
                 .onAppear {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
@@ -52,48 +62,56 @@ struct DownloadStatusOverlay: View {
             }
 
             if let successMsg = downloadManager.successMessage {
-                HStack {
-                    Image(systemName: "checkmark.circle.fill").foregroundColor(.white)
-                    Text(successMsg).font(.subheadline).foregroundColor(.white)
+                HStack(spacing: 12) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .symbolEffect(.bounce, value: successMsg)
+                    Text(successMsg)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
                     Spacer()
                 }
-                .padding()
-                .background(Color.green.opacity(0.9))
-                .cornerRadius(12)
+                .padding(14)
+                .glassCard(cornerRadius: AppTheme.radiusM)
+                .environment(\.colorScheme, .dark)
                 .padding(.horizontal)
             }
 
             if downloadManager.isDownloading {
                 HStack(spacing: 15) {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text("ダウンロード中...").font(.caption).foregroundColor(.secondary)
+                            Text("ダウンロード中…")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(Color.appTextSecondary)
                             Spacer()
-                            Text("\(Int(downloadManager.progress * 100))%").font(.caption.monospacedDigit()).foregroundColor(.secondary)
+                            Text("\(Int(downloadManager.progress * 100))%")
+                                .font(.caption.weight(.bold).monospacedDigit())
+                                .foregroundStyle(Color.appGold)
                         }
 
                         Text(downloadManager.currentFilename)
                             .font(.subheadline.bold())
-                            .foregroundColor(.primary)
+                            .foregroundStyle(.white)
                             .lineLimit(1)
 
                         ProgressView(value: downloadManager.progress)
                             .progressViewStyle(.linear)
+                            .tint(Color.appGold)
                     }
 
                     Button(action: { downloadManager.cancelDownload() }) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.title2)
-                            .foregroundColor(.gray)
+                            .foregroundStyle(.white.opacity(0.4))
                     }
                 }
-                .padding()
-                .background(.ultraThinMaterial)
-                .cornerRadius(12)
-                .shadow(radius: 5)
+                .padding(14)
+                .glassCard(cornerRadius: AppTheme.radiusM)
+                .environment(\.colorScheme, .dark)
                 .padding(.horizontal)
             }
         }
-        .animation(.spring(), value: downloadManager.isDownloading)
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: downloadManager.isDownloading)
     }
 }

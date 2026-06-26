@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import MediaServerKit
 
 // MARK: - 認証ヘルパー
 enum ServerAuth {
@@ -38,6 +39,23 @@ enum ServerAuth {
         if let pin = pin(for: address) { items.append(URLQueryItem(name: "pin", value: pin)) }
         if !items.isEmpty { comps.queryItems = items }
         return comps.url
+    }
+
+    /// 同時再生・スライドショーの起動直前に呼ぶ。対象動画の先頭へ小さな Range リクエストを投げ、
+    /// 外付けHDDのスピンアップ（スリープ復帰）や初回TCP接続のコストを先に済ませておく。
+    /// これをやらないと、コールド状態のサーバーに複数本同時アクセスした際に
+    /// 最初の数本が初回アクセスのレイテンシで再生開始に失敗する。
+    static func prewarm(address: String, videoIDs: [String]) {
+        for id in videoIDs {
+            guard let url = mediaURL(address: address, path: "/video/\(id)") else { continue }
+            Task.detached {
+                var req = URLRequest(url: url)
+                req.setValue("bytes=0-65535", forHTTPHeaderField: "Range")
+                req.cachePolicy = .reloadIgnoringLocalCacheData
+                req.timeoutInterval = 30
+                _ = try? await URLSession.shared.data(for: req)
+            }
+        }
     }
 }
 
@@ -231,26 +249,7 @@ class ServerBrowser: NSObject, ObservableObject, NetServiceBrowserDelegate, NetS
 }
 
 // MARK: - Server Data Models
-
-struct RemoteAlbumInfo: Codable, Identifiable, Hashable {
-    let id: String
-    let name: String
-    let videoCount: Int
-    let type: String?
-}
-
-struct RemoteVideoInfo: Codable, Identifiable, Hashable {
-    let id: String
-    let filename: String
-    let duration: TimeInterval
-    let importDate: Date
-    let creationDate: Date?
-    let mediaType: String?
-
-    var isPhoto: Bool {
-        return mediaType == "photo"
-    }
-}
+// RemoteAlbumInfo / RemoteVideoInfo は MediaServerKit に集約（Mac サーバーと共有）
 
 @MainActor
 class ServerManager: ObservableObject {

@@ -1,4 +1,5 @@
 import SwiftUI
+import MediaServerKit
 
 struct RemoteAlbumListView: View {
     let serverName: String

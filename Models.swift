@@ -66,9 +66,4 @@ enum RemoteSortOrder: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-// MARK: - App Theme Colors
-extension Color {
-    static let appGold           = Color(red: 0.85, green: 0.73, blue: 0.45)
-    static let appDarkBackground = Color(red: 0.05, green: 0.05, blue: 0.08)
-    static let appDarkSurface    = Color(red: 0.10, green: 0.10, blue: 0.14)
-}
+// カラーパレットは Theme.swift（デザインシステム）に集約

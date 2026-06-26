@@ -52,48 +52,59 @@ private struct CustomTrashAlertView: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.4)
+            Color.black.opacity(0.55)
                 .edgesIgnoringSafeArea(.all)
                 .onTapGesture { isPresented = false }
 
-            VStack(spacing: 15) {
+            VStack(spacing: 8) {
+                Image(systemName: "trash.fill")
+                    .font(.title2)
+                    .foregroundStyle(.red.opacity(0.9))
+                    .padding(.top, 22)
+                    .padding(.bottom, 4)
+
                 Text("ごみ箱を空にしますか？")
                     .font(.headline)
-                    .padding(.top)
+                    .foregroundStyle(.white)
 
                 Text("この操作は取り消せません。")
                     .font(.subheadline)
                     .multilineTextAlignment(.center)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(Color.appTextSecondary)
+                    .padding(.bottom, 16)
 
-                Divider()
+                Divider().background(Color.white.opacity(0.15))
 
-                HStack {
+                HStack(spacing: 0) {
                     Button {
                         onConfirm()
                         isPresented = false
                     } label: {
                         Text("空にする")
+                            .fontWeight(.bold)
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
+                            .padding(.vertical, 14)
                     }
-                    .foregroundColor(.red)
+                    .foregroundStyle(.red)
 
-                    Color.gray.opacity(0.5).frame(width: 1, height: 40)
+                    Color.white.opacity(0.15).frame(width: 0.5, height: 46)
 
                     Button {
                         isPresented = false
                     } label: {
                         Text("キャンセル")
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
+                            .padding(.vertical, 14)
                     }
+                    .foregroundStyle(.white)
                 }
             }
-            .frame(width: 280)
-            .background(.thinMaterial)
-            .cornerRadius(14)
-            .shadow(radius: 10)
+            .frame(width: 290)
+            .background(.ultraThinMaterial)
+            .environment(\.colorScheme, .dark)
+            .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusM, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: AppTheme.radiusM, style: .continuous).strokeBorder(AppTheme.cardStroke, lineWidth: 1))
+            .shadow(color: .black.opacity(0.5), radius: 24, x: 0, y: 12)
         }
     }
 }
@@ -110,6 +121,7 @@ struct VideoGridView: View {
     @EnvironmentObject var appSettings: AppSettings
 
     @State private var videoMetadatas: [VideoMetadata] = []
+    @State private var hasLoaded = false
     @State private var videoToPlay: IdentifiableURL?
 
     @State private var showImportOptions = false
@@ -134,7 +146,20 @@ struct VideoGridView: View {
     private let accentGlowColor  = Color.appGold
 
 
-    private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private func adaptiveColumns(for width: CGFloat) -> [GridItem] {
+        let count: Int
+        if horizontalSizeClass == .regular {
+            if width > 1100 { count = 7 }
+            else if width > 900 { count = 6 }
+            else if width > 600 { count = 5 }
+            else { count = 4 }
+        } else {
+            count = 3
+        }
+        return Array(repeating: GridItem(.flexible(), spacing: 3), count: count)
+    }
 
     private var filteredAndSortedVideos: [VideoMetadata] {
         let filtered: [VideoMetadata]
@@ -164,20 +189,29 @@ struct VideoGridView: View {
 
     var body: some View {
         ZStack {
-            primaryDarkColor.ignoresSafeArea()
-            
+            AppBackground()
+
             ZStack(alignment: .bottom) {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVGrid(columns: columns, spacing: 2) {
-                            ForEach(filteredAndSortedVideos) { metadata in
-                                thumbnailView(for: metadata)
-                                    .id(metadata.id)
+                if hasLoaded && filteredAndSortedVideos.isEmpty {
+                    emptyStateView
+                } else {
+                    ScrollViewReader { proxy in
+                        GeometryReader { geo in
+                            ScrollView {
+                                LazyVGrid(columns: adaptiveColumns(for: geo.size.width), spacing: 3) {
+                                    ForEach(filteredAndSortedVideos) { metadata in
+                                        thumbnailView(for: metadata)
+                                            .id(metadata.id)
+                                    }
+                                }
+                                .padding(.horizontal, 3)
+                                .padding(.top, 3)
+                                .padding(.bottom, isSelectionMode ? 110 : 12)
+                            }
+                            .onPreferenceChange(VideoThumbnailPreferenceKey.self) { frames in
+                                self.thumbnailFrames = frames
                             }
                         }
-                    }
-                    .onPreferenceChange(VideoThumbnailPreferenceKey.self) { frames in
-                        self.thumbnailFrames = frames
                     }
                 }
 
@@ -239,7 +273,32 @@ struct VideoGridView: View {
     }
 
     // MARK: - Subviews
-    
+
+    /// 空のアルバム / 空のごみ箱の案内表示
+    private var emptyStateView: some View {
+        VStack(spacing: 18) {
+            Image(systemName: albumType == .trash ? "trash" : "film.stack")
+                .font(.system(size: 56, weight: .light))
+                .foregroundStyle(AppTheme.goldGradient)
+                .shadow(color: Color.appGold.opacity(0.3), radius: 12)
+
+            Text(albumType == .trash ? "ごみ箱は空です" : "ビデオがありません")
+                .font(.title3.weight(.bold))
+                .foregroundStyle(.white)
+
+            if albumType != .trash {
+                Text(searchText.isEmpty
+                     ? "右上の＋ボタンから\n写真ライブラリやファイルを取り込めます"
+                     : "「\(searchText)」に一致するビデオはありません")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.appTextSecondary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(5)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     @ToolbarContentBuilder
     private func toolbarContent() -> some ToolbarContent {
         ToolbarItem(placement: .navigationBarLeading) {
@@ -281,35 +340,51 @@ struct VideoGridView: View {
 
     @ViewBuilder
     private var deleteButton: some View {
-        Button(action: deleteSelectedVideos) {
-            Text("\(selectedVideos.count)件を削除")
-                .fontWeight(.bold)
-                .padding()
+        Button(action: { Haptics.warning(); deleteSelectedVideos() }) {
+            Label("\(selectedVideos.count)件を削除", systemImage: "trash.fill")
+                .font(.headline.weight(.bold))
+                .padding(.vertical, 15)
                 .frame(maxWidth: .infinity)
-                .background(selectedVideos.isEmpty ? Color.gray.opacity(0.5) : Color.red)
-                .foregroundColor(.white)
-                .cornerRadius(10)
+                .background(
+                    selectedVideos.isEmpty
+                    ? AnyShapeStyle(Color.white.opacity(0.08))
+                    : AnyShapeStyle(LinearGradient(colors: [.red, .red.opacity(0.75)], startPoint: .top, endPoint: .bottom))
+                )
+                .foregroundStyle(selectedVideos.isEmpty ? Color.appTextTertiary : .white)
+                .clipShape(Capsule())
+                .shadow(color: selectedVideos.isEmpty ? .clear : .red.opacity(0.35), radius: 10, x: 0, y: 4)
         }
+        .buttonStyle(PressableCardStyle(scale: 0.97))
         .disabled(selectedVideos.isEmpty)
-        .padding()
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
         .background(.ultraThinMaterial)
+        .overlay(Rectangle().frame(height: 0.5).foregroundStyle(Color.white.opacity(0.1)), alignment: .top)
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     @ViewBuilder
     private var restoreButton: some View {
-        Button(action: restoreSelectedVideos) {
-            Text("\(selectedVideos.count)件を元に戻す")
-                .fontWeight(.bold)
-                .padding()
+        Button(action: { Haptics.success(); restoreSelectedVideos() }) {
+            Label("\(selectedVideos.count)件を元に戻す", systemImage: "arrow.uturn.backward")
+                .font(.headline.weight(.bold))
+                .padding(.vertical, 15)
                 .frame(maxWidth: .infinity)
-                .background(selectedVideos.isEmpty ? Color.gray.opacity(0.5) : accentGlowColor)
-                .foregroundColor(.white)
-                .cornerRadius(10)
+                .background(
+                    selectedVideos.isEmpty
+                    ? AnyShapeStyle(Color.white.opacity(0.08))
+                    : AnyShapeStyle(AppTheme.goldGradient)
+                )
+                .foregroundStyle(selectedVideos.isEmpty ? Color.appTextTertiary : Color.appDarkBackground)
+                .clipShape(Capsule())
+                .shadow(color: selectedVideos.isEmpty ? .clear : Color.appGold.opacity(0.35), radius: 10, x: 0, y: 4)
         }
+        .buttonStyle(PressableCardStyle(scale: 0.97))
         .disabled(selectedVideos.isEmpty)
-        .padding()
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
         .background(.ultraThinMaterial)
+        .overlay(Rectangle().frame(height: 0.5).foregroundStyle(Color.white.opacity(0.1)), alignment: .top)
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
@@ -332,6 +407,8 @@ struct VideoGridView: View {
 
     @ViewBuilder
     private func thumbnailView(for metadata: VideoMetadata) -> some View {
+        let isSelected = selectedVideos.contains(metadata.url)
+
         ZStack(alignment: .topTrailing) {
             LocalVideoThumbnailView(url: metadata.url)
                 .contextMenu {
@@ -341,20 +418,17 @@ struct VideoGridView: View {
                         Button(role: .destructive) { deleteSingleVideo(at: metadata.url) } label: { Label("削除", systemImage: "trash") }
                     }
                 }
-            
-            .shadow(color: Color.black.opacity(0.4), radius: 6, x: 3, y: 3)
-            .shadow(color: Color.white.opacity(0.05), radius: 3, x: -1, y: -1)
 
-            if isSelectionMode && selectedVideos.contains(metadata.url) {
-                Color.black.opacity(0.4)
+            if isSelectionMode && isSelected {
+                Color.black.opacity(0.35)
             }
-            
+
             if isSelectionMode {
-                let isSelected = selectedVideos.contains(metadata.url)
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.title2.weight(.bold))
-                    .foregroundColor(isSelected ? accentGlowColor : .white)
-                    .padding(5)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(isSelected ? Color.appGold : .white)
+                    .symbolEffect(.bounce, value: isSelected)
+                    .padding(6)
                     .background(
                         Group {
                             if !isSelected {
@@ -365,11 +439,18 @@ struct VideoGridView: View {
                     .offset(x: -2, y: 2)
             }
         }
-        .cornerRadius(12)
-        .clipped()
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusS, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: AppTheme.radiusS, style: .continuous)
+                .strokeBorder(isSelectionMode && isSelected ? Color.appGold : Color.white.opacity(0.06),
+                              lineWidth: isSelectionMode && isSelected ? 2 : 0.5)
+        )
+        .scaleEffect(isSelectionMode && isSelected ? 0.94 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
         .contentShape(Rectangle())
         .onTapGesture {
             if isSelectionMode {
+                Haptics.soft()
                 toggleSelection(for: metadata.url)
             } else {
                 self.videoToPlay = IdentifiableURL(url: metadata.url)
@@ -515,6 +596,7 @@ struct VideoGridView: View {
                 }
             }
             self.videoMetadatas = metadatas
+            self.hasLoaded = true
         }
     }
 

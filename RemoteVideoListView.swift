@@ -12,18 +12,37 @@ import AppKit
 
 // MARK: - メインビュー
 struct RemoteVideoListView: View {
+    private struct ShortsLaunchRequest: Identifiable {
+        let id = UUID()
+        let video: RemoteVideoInfo
+        let playlist: [RemoteVideoInfo]
+        let startTime: Double?
+    }
+
+    private struct ShortsShelfItem: Identifiable {
+        let id: String
+        let frameKey: String
+        let video: RemoteVideoInfo
+    }
+
+    private let shortsMaxDuration: Double = 60
+
     let serverName: String
     let serverAddress: String
     let albumID: String
     var allServerAlbums: [RemoteAlbumInfo] = []
     var initialVideoToPlay: RemoteVideoInfo? = nil
+    var initialStartTime: Double? = nil
     var isPresentedFromShorts: Bool = false
+    
+    @EnvironmentObject var navState: AppNavigationState
     
     @State private var videos: [RemoteVideoInfo] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var showEmptyMessage = false
     @State private var centeredVideoIDInFeed: String? = nil
+    @State private var centeredShortIDByShelf: [String: String] = [:]
     @State private var searchText = ""
     
     @State private var videoToPlay: RemoteVideoInfo?
@@ -61,9 +80,10 @@ struct RemoteVideoListView: View {
     @State private var multiPlayVideos: [RemoteVideoInfo] = []
     @State private var showSlideshow = false
     @State private var slideshowVideos: [RemoteVideoInfo] = []
-    @State private var showAlbumShorts = false
+    @State private var shortsLaunchRequest: ShortsLaunchRequest? = nil
     @State private var showShortsFavoritesPlayer = false
     @State private var selectedShortsFavoriteIndex: Int = 0
+    @State private var isShortsPlaying: Bool = true
     
     @State private var showUploadSourceMenu = false
     @State private var showPhotoPicker = false
@@ -79,6 +99,8 @@ struct RemoteVideoListView: View {
     @ObservedObject private var favorites = FavoritesManager.shared
 
     @State private var currentSortOrder: RemoteSortOrder = .importDescending
+    
+    // コントロール表示用の状態はDraggablePlayerViewに移動しました
 
     private let primaryDarkColor = Color.appDarkBackground
     private let accentGlowColor  = Color.appGold
@@ -94,7 +116,8 @@ struct RemoteVideoListView: View {
     }
 
     private var sortedAndFilteredVideos: [RemoteVideoInfo] {
-        let filtered = searchText.isEmpty ? videos : videos.filter { $0.filename.localizedCaseInsensitiveContains(searchText) }
+        let uniqueVideos = uniqueVideosByID(videos)
+        let filtered = searchText.isEmpty ? uniqueVideos : uniqueVideos.filter { $0.filename.localizedCaseInsensitiveContains(searchText) }
         
         if albumID == "HISTORY" || albumID == "FAVORITES" || albumID == "HOME" {
             return filtered
@@ -131,7 +154,10 @@ struct RemoteVideoListView: View {
                     } else {
                         GeometryReader { geo in
                             if albumID == "SHORTS" {
-                                RemoteShortsPlayerView(videos: sortedAndFilteredVideos, serverAddress: serverAddress, allServerAlbums: allServerAlbums)
+                                RemoteShortsPlayerView(videos: sortedAndFilteredVideos, serverAddress: serverAddress, allServerAlbums: allServerAlbums, initialVideoToPlay: initialVideoToPlay) { playing in
+                                    isShortsPlaying = playing
+                                }
+                                .id((initialVideoToPlay?.id ?? "shorts") + navState.shortsJumpTrigger.uuidString)
                             } else if albumID == "SHORTS_FAVORITES" {
                                 shortsFavoritesGrid(width: geo.size.width)
                             } else if albumID == "HOME" {
@@ -246,6 +272,7 @@ struct RemoteVideoListView: View {
             
             if let video = videoToPlay {
                 let onlyVideos = sortedAndFilteredVideos.filter { !$0.isPhoto }
+                let playerStartTime = video.id == initialVideoToPlay?.id ? initialStartTime : nil
                 if let initialIndex = onlyVideos.firstIndex(where: { $0.id == video.id }) {
                     DraggablePlayerView(
                         videos: onlyVideos,
@@ -254,6 +281,7 @@ struct RemoteVideoListView: View {
                         videoToPlay: $videoToPlay,
                         playingVideoID: $playingVideoID,
                         isMinimized: $isPlayerMinimized,
+                        initialStartTime: playerStartTime,
                         isPresentedFromShorts: isPresentedFromShorts
                     )
                     .id(video.id)
@@ -268,6 +296,7 @@ struct RemoteVideoListView: View {
                         videoToPlay: $videoToPlay,
                         playingVideoID: $playingVideoID,
                         isMinimized: $isPlayerMinimized,
+                        initialStartTime: playerStartTime,
                         isPresentedFromShorts: isPresentedFromShorts
                     )
                     .id(video.id)
@@ -283,7 +312,7 @@ struct RemoteVideoListView: View {
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbarBackground(Color.appDarkBackground, for: .navigationBar)
         .toolbar(shouldHideNavigationBar ? .hidden : .visible, for: .navigationBar)
-        .toolbar((videoToPlay != nil && !isPlayerMinimized) ? .hidden : .visible, for: .tabBar)
+        .toolbar((videoToPlay != nil && !isPlayerMinimized) || (albumID == "SHORTS" && isShortsPlaying) ? .hidden : .automatic, for: .tabBar)
         .fullScreenCover(isPresented: $showShortsFavoritesPlayer) {
             RemoteShortsFavoritesPlayerView(
                 videos: sortedAndFilteredVideos,
@@ -340,9 +369,13 @@ struct RemoteVideoListView: View {
                     }
                     
                     if albumID != "SHORTS" && albumID != "HOME" {
-                        Button(action: { showAlbumShorts = true }) {
+                        Button(action: {
+                            if let video = sortedAndFilteredVideos.filter({ isShortVideo($0) }).randomElement() {
+                                openShortsPlayer(video: video, startTime: nil)
+                            }
+                        }) {
                             Image(systemName: "flame.fill").foregroundColor(.cyan)
-                        }.disabled(videos.filter { !$0.isPhoto }.isEmpty)
+                        }.disabled(sortedAndFilteredVideos.filter { isShortVideo($0) }.isEmpty)
                     }
                 }
             }
@@ -382,12 +415,15 @@ struct RemoteVideoListView: View {
         .fullScreenCover(isPresented: $showSlideshow) {
             RemoteSlideshowPlayerView(videos: slideshowVideos, serverAddress: serverAddress)
         }
-        .fullScreenCover(isPresented: $showAlbumShorts) {
-            RemoteShortsPlayerView(videos: sortedAndFilteredVideos, serverAddress: serverAddress, allServerAlbums: allServerAlbums)
+        .fullScreenCover(item: $shortsLaunchRequest) { request in
+            // item ベースで提示することで、タップした動画が確実に initialVideoToPlay に渡る
+            // （isPresented + 別 @State だと未反映の nil で生成され、ランダム再生になっていた）
+            RemoteShortsPlayerView(videos: request.playlist, serverAddress: serverAddress, allServerAlbums: allServerAlbums, initialVideoToPlay: request.video, initialStartTime: request.startTime)
+                .id(request.id)
         }
         .sheet(item: $videoForInfoSheet) { video in VideoInfoSheetView(video: video, serverAddress: serverAddress, downloadManager: downloadManager) }
         .task { 
-            if let initial = initialVideoToPlay {
+            if let initial = initialVideoToPlay, albumID != "SHORTS" {
                 videoToPlay = initial
                 playingVideoID = initial.id
             }
@@ -469,15 +505,27 @@ struct RemoteVideoListView: View {
     
     // MARK: - ホームフィード（YouTube風 大きなサムネイル）
     private func homeFeedList(width: CGFloat) -> some View {
-        ScrollView {
+        let shorts = sortedAndFilteredVideos.filter { isShortVideo($0) }
+        
+        return ScrollView {
             LazyVStack(spacing: 32) {
-                ForEach(sortedAndFilteredVideos) { video in
+                let enumeratedVideos = Array(sortedAndFilteredVideos.enumerated())
+                ForEach(enumeratedVideos, id: \.element.id) { index, video in
                     homeFeedRow(for: video, width: width)
                         .scrollTransition(.animated(.spring(response: 0.4, dampingFraction: 0.8))) { content, phase in
                             content
                                 .opacity(phase.isIdentity ? 1 : 0.5)
                                 .scaleEffect(phase.isIdentity ? 1 : 0.95)
                         }
+                    
+                    if isShortsShelfIndex(index) && !shorts.isEmpty {
+                        shortsShelf(shorts: getStableShorts(for: index, from: shorts), width: width, shelfID: "shelf-\(index)")
+                    }
+                }
+                
+                // If there are less than 2 videos, display shorts shelf at the end
+                if enumeratedVideos.count <= 1 && !shorts.isEmpty {
+                    shortsShelf(shorts: getStableShorts(for: 1, from: shorts), width: width, shelfID: "shelf-end")
                 }
             }
             .padding(.vertical, 16)
@@ -500,6 +548,135 @@ struct RemoteVideoListView: View {
         }
         .refreshable { await fetchVideosFromServer() }
     }
+    
+    private func getStableShorts(for shelfIndex: Int, from allShorts: [RemoteVideoInfo]) -> [RemoteVideoInfo] {
+        let sorted = allShorts.filter { isShortVideo($0) }.sorted {
+            let hash0 = UInt(bitPattern: $0.id.hashValue ^ shelfIndex.hashValue)
+            let hash1 = UInt(bitPattern: $1.id.hashValue ^ shelfIndex.hashValue)
+            return hash0 < hash1
+        }
+        
+        var selected = [RemoteVideoInfo]()
+        
+        // おすすめショート棚は，実際にショートとして再生する動画だけに限定する。
+        selected.append(contentsOf: sorted.prefix(15))
+        
+        // 棚ごとにもう一度安定したハッシュで並び替えて返す。
+        return selected.sorted {
+            let hash0 = UInt(bitPattern: $0.id.hashValue ^ (shelfIndex.hashValue &* 2))
+            let hash1 = UInt(bitPattern: $1.id.hashValue ^ (shelfIndex.hashValue &* 2))
+            return hash0 < hash1
+        }
+    }
+
+    private func isShortsShelfIndex(_ index: Int) -> Bool {
+        if index == 1 { return true }
+        if index < 1 { return false }
+        
+        var currentIndex = 1
+        var seed = 12345
+        while currentIndex < index {
+            seed = (seed &* 1103515245) &+ 12345
+            let step = 4 + (abs(seed) % 7) // 4 to 10
+            currentIndex += step
+            if currentIndex == index { return true }
+        }
+        return false
+    }
+    
+    @ViewBuilder
+    private func shortsShelf(shorts: [RemoteVideoInfo], width: CGFloat, shelfID: String) -> some View {
+        let items = shortsShelfItems(shorts: shorts, shelfID: shelfID)
+        let videoIDByFrameKey = Dictionary(uniqueKeysWithValues: items.map { ($0.frameKey, $0.video.id) })
+
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 8) {
+                Image(systemName: "flame.fill").foregroundColor(.cyan)
+                Text("おすすめショート")
+                    .font(.title3.weight(.bold))
+                    .foregroundColor(.white)
+            }
+            .padding(.horizontal, 16)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(items) { item in
+                        Button {
+                            #if DEBUG
+                            print("ShortsCardTap shelf=\(shelfID) key=\(item.frameKey) tappedID=\(item.video.id) title=\(item.video.filename)")
+                            #endif
+                            Haptics.light()
+                            openShortsPlayer(video: item.video, playbackKey: item.frameKey)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Group {
+                                    if centeredShortIDByShelf[shelfID] == item.video.id {
+                                        FeedInlinePlayerView(video: item.video, serverAddress: serverAddress, width: 140, isOverlayActive: videoToPlay != nil, playbackKey: item.frameKey)
+                                            .id(item.frameKey)
+                                            .frame(width: 140, height: 250)
+                                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                                            .allowsHitTesting(false)
+                                    } else {
+                                        RemoteVideoThumbnailView(
+                                            thumbnailURL: ServerAuth.mediaURL(address: serverAddress, path: "/thumbnail/\(item.video.id)", query: [URLQueryItem(name: "original", value: "true")]),
+                                            duration: item.video.duration,
+                                            contentMode: .fill,
+                                            forceSquare: false
+                                        )
+                                        .id(item.frameKey)
+                                        .frame(width: 140, height: 250)
+                                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                                        .allowsHitTesting(false)
+                                    }
+                                }
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
+                                )
+                                
+                                Text(item.video.filename.cleanVideoTitle)
+                                    .font(.caption.weight(.medium))
+                                    .foregroundColor(.white)
+                                    .lineLimit(2)
+                                    .frame(width: 140, alignment: .leading)
+                            }
+                            .frame(width: 140, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .id(item.id)
+                        .background(GeometryReader { geo in
+                            Color.clear.preference(key: ShortsVideoFrameKey.self, value: [item.frameKey: geo.frame(in: .global)])
+                        })
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            .contentShape(Rectangle())
+            .onPreferenceChange(ShortsVideoFrameKey.self) { frames in
+                let screenCenter = UIScreen.main.bounds.width / 2
+                var closestID: String? = nil
+                var minDistance: CGFloat = .infinity
+                for (key, frame) in frames {
+                    let dist = abs(frame.midX - screenCenter)
+                    // If it's near the center horizontally
+                    if dist < minDistance && dist < 140 * 1.5 {
+                        minDistance = dist
+                        closestID = videoIDByFrameKey[key]
+                    }
+                }
+                if centeredShortIDByShelf[shelfID] != closestID {
+                    centeredShortIDByShelf[shelfID] = closestID
+                }
+            }
+        }
+        .padding(.vertical, 20)
+        .background(
+            Color.white.opacity(0.03)
+                .overlay(Rectangle().frame(height: 1).foregroundColor(Color.white.opacity(0.05)), alignment: .top)
+                .overlay(Rectangle().frame(height: 1).foregroundColor(Color.white.opacity(0.05)), alignment: .bottom)
+        )
+    }
 
     @ViewBuilder
     private func homeFeedRow(for video: RemoteVideoInfo, width: CGFloat) -> some View {
@@ -511,7 +688,7 @@ struct RemoteVideoListView: View {
                         .frame(width: width, height: width * 9 / 16)
                         .clipped()
                 } else {
-                    RemoteVideoThumbnailView(thumbnailURL: ServerAuth.mediaURL(address: serverAddress, path: "/thumbnail/\(video.id)", query: [URLQueryItem(name: "original", value: "true")]), duration: video.duration, contentMode: .fit, forceSquare: false)
+                    RemoteVideoThumbnailView(thumbnailURL: ServerAuth.mediaURL(address: serverAddress, path: "/thumbnail/\(video.id)", query: [URLQueryItem(name: "original", value: "true")]), duration: video.duration, contentMode: .fill, forceSquare: false)
                         .frame(width: width, height: width * 9 / 16)
                         .clipped()
                         .overlay(
@@ -556,7 +733,7 @@ struct RemoteVideoListView: View {
                 .buttonStyle(PlainButtonStyle())
                 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(video.filename)
+                    Text(video.filename.cleanVideoTitle)
                         .font(.body.weight(.semibold))
                         .foregroundColor(.white)
                         .lineLimit(2)
@@ -632,7 +809,7 @@ struct RemoteVideoListView: View {
             }
             
             VStack(alignment: .leading, spacing: 6) {
-                Text(video.filename)
+                Text(video.filename.cleanVideoTitle)
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white)
                     .lineLimit(2)
@@ -688,6 +865,9 @@ struct RemoteVideoListView: View {
             Haptics.light()
             if video.isPhoto { 
                 photoToView = video
+            } else if albumID == "HOME" && isShortVideo(video) {
+                // item ベースの fullScreenCover が presented され、この動画を先頭再生する
+                openShortsPlayer(video: video)
             } else {
                 playingVideoID = video.id
                 PlaybackHistoryManager.shared.saveLastPlayed(id: video.id)
@@ -697,6 +877,47 @@ struct RemoteVideoListView: View {
                 }
             }
         }
+    }
+
+    private func openShortsPlayer(video: RemoteVideoInfo, startTime: Double? = nil, playbackKey: String? = nil) {
+        let cardStartTime = playbackKey.flatMap { FeedPlaybackManager.shared.times[$0] }
+        let sharedStartTime = playbackKey == nil ? FeedPlaybackManager.shared.times[video.id] : nil
+        let resolvedStartTime = startTime ?? cardStartTime ?? sharedStartTime ?? 0
+        #if DEBUG
+        print("ShortsLaunch tappedID=\(video.id) title=\(video.filename) start=\(resolvedStartTime)")
+        #endif
+        shortsLaunchRequest = ShortsLaunchRequest(
+            video: video,
+            playlist: shortsLaunchPlaylist(startingWith: video),
+            startTime: resolvedStartTime
+        )
+    }
+
+    private func shortsLaunchPlaylist(startingWith video: RemoteVideoInfo) -> [RemoteVideoInfo] {
+        let baseVideos = uniqueVideosByID(sortedAndFilteredVideos).filter { isShortVideo($0) && $0.id != video.id }
+        return [video] + baseVideos
+    }
+
+    private func shortsShelfItems(shorts: [RemoteVideoInfo], shelfID: String) -> [ShortsShelfItem] {
+        uniqueVideosByID(shorts).enumerated().map { index, video in
+            let frameKey = shortsFrameKey(shelfID: shelfID, index: index, videoID: video.id)
+            return ShortsShelfItem(id: frameKey, frameKey: frameKey, video: video)
+        }
+    }
+
+    private func shortsFrameKey(shelfID: String, index: Int, videoID: String) -> String {
+        "\(shelfID)#\(index)#\(videoID)"
+    }
+
+    private func uniqueVideosByID(_ source: [RemoteVideoInfo]) -> [RemoteVideoInfo] {
+        var seenIDs = Set<String>()
+        return source.filter { video in
+            seenIDs.insert(video.id).inserted
+        }
+    }
+
+    private func isShortVideo(_ video: RemoteVideoInfo) -> Bool {
+        !video.isPhoto && video.duration > 0 && video.duration <= shortsMaxDuration
     }
     
     @ViewBuilder
@@ -1207,6 +1428,7 @@ private struct DraggablePlayerView: View {
     @Binding var videoToPlay: RemoteVideoInfo?
     @Binding var playingVideoID: String?
     @Binding var isMinimized: Bool
+    let initialStartTime: Double?
     var isPresentedFromShorts: Bool = false
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
@@ -1216,11 +1438,8 @@ private struct DraggablePlayerView: View {
     @State private var showSameAlbumOnly: Bool = false
     @State private var selectedQuality: String = "original"
     
-    @State private var controlsScrollOffset: CGFloat = 0
-    @State private var lastScrollY: CGFloat = 0
-    @State private var controlsHeight: CGFloat = 160
-    @State private var accumulatedScrollUp: CGFloat = 0
-    @State private var initialScrollY: CGFloat? = nil
+    @State private var isControlsHidden = false
+    @State private var showFloatingControlsOverlay = false
     @State private var showTitlePopup: Bool = false
 
     @State private var isPreparingQuality: Bool = false
@@ -1248,21 +1467,26 @@ private struct DraggablePlayerView: View {
     @AppStorage("slideshowClipDuration") private var slideshowClipDuration: Double = 10
     @State private var slideshowTask: Task<Void, Never>? = nil
 
+    @EnvironmentObject var appSettings: AppSettings
+    @EnvironmentObject var navState: AppNavigationState
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     private let accentGlowColor = Color.appGold
 
-    init(videos: [RemoteVideoInfo], initialIndex: Int, serverAddress: String, videoToPlay: Binding<RemoteVideoInfo?>, playingVideoID: Binding<String?>, isMinimized: Binding<Bool>, isPresentedFromShorts: Bool = false) {
+    init(videos: [RemoteVideoInfo], initialIndex: Int, serverAddress: String, videoToPlay: Binding<RemoteVideoInfo?>, playingVideoID: Binding<String?>, isMinimized: Binding<Bool>, initialStartTime: Double? = nil, isPresentedFromShorts: Bool = false) {
         self.videos = videos
         self._currentIndex = State(initialValue: initialIndex)
         self.serverAddress = serverAddress
         self._videoToPlay = videoToPlay
         self._playingVideoID = playingVideoID
         self._isMinimized = isMinimized
+        self.initialStartTime = initialStartTime
         self.isPresentedFromShorts = isPresentedFromShorts
+        self._showSameAlbumOnly = State(initialValue: UserDefaults.standard.bool(forKey: "showSameAlbumOnlyDefault"))
         
         let initialVideo = videos[initialIndex]
         let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(initialVideo.id)") ?? URL(string: "\(serverAddress)/video/\(initialVideo.id)")!
-        let startAt = FeedPlaybackManager.shared.times[initialVideo.id] ?? 0.0
+        let storedStartTime = FeedPlaybackManager.shared.times[initialVideo.id]
+        let startAt = [initialStartTime, storedStartTime].compactMap { $0 }.first(where: { $0.isFinite }) ?? 0.0
         self._playerManager = StateObject(wrappedValue: PlayerManager(videoURL: url, startAt: startAt))
     }
     
@@ -1294,6 +1518,13 @@ private struct DraggablePlayerView: View {
         .onAppear {
             startHideTimer()
             playerManager.onEnded = { handlePlaybackEnded() }
+            syncCurrentIndexWithPlayingVideo()
+        }
+        .onChange(of: videos) { _, _ in
+            syncCurrentIndexWithPlayingVideo()
+        }
+        .onChange(of: playingVideoID) { _, _ in
+            syncCurrentIndexWithPlayingVideo()
         }
         .onReceive(playerManager.$isReadyToPlay) { ready in
             if ready && isSlideshow { scheduleSlideshowAdvance() }
@@ -1447,12 +1678,14 @@ private struct DraggablePlayerView: View {
                     .foregroundColor(.white)
                 
                 ScrollView {
-                    Text(videos[currentIndex].filename)
-                        .font(.body)
-                        .foregroundColor(.white)
-                        .textSelection(.enabled)
-                        .multilineTextAlignment(.leading)
-                        .padding()
+                    if videos.indices.contains(currentIndex) {
+                        Text(videos[currentIndex].filename.cleanVideoTitle)
+                            .font(.body)
+                            .foregroundColor(.white)
+                            .textSelection(.enabled)
+                            .multilineTextAlignment(.leading)
+                            .padding()
+                    }
                 }
                 .frame(maxHeight: 150)
                 .background(Color.white.opacity(0.1))
@@ -1460,10 +1693,12 @@ private struct DraggablePlayerView: View {
                 
                 HStack(spacing: 20) {
                     Button(action: {
-                        UIPasteboard.general.string = videos[currentIndex].filename
+                        if videos.indices.contains(currentIndex) {
+                            UIPasteboard.general.string = videos[currentIndex].filename.cleanVideoTitle
+                        }
                         withAnimation { showTitlePopup = false }
                     }) {
-                        Text("すべてコピー")
+                        Text("タイトルをコピー")
                             .font(.subheadline.weight(.bold))
                             .padding(.horizontal, 20)
                             .padding(.vertical, 12)
@@ -1627,90 +1862,109 @@ private struct DraggablePlayerView: View {
 
     /// iPad 等の幅広端末ではグリッド、iPhone 等ではリスト表示で「次の動画」を表示
     private func upNextList(availableWidth: CGFloat) -> some View {
-        let useGrid = horizontalSizeClass == .regular && availableWidth > 500
+        let useGrid: Bool
+        switch appSettings.upNextDisplayStyle {
+        case 1: useGrid = false // List
+        case 2: useGrid = true  // Grid
+        default: useGrid = horizontalSizeClass == .regular && availableWidth > 500 // Auto
+        }
         
         let hasMultipleAlbums = Set(videos.compactMap { $0.parentAlbumID }).count > 1
         let currentAlbumID = videos[currentIndex].parentAlbumID
         let displayVideos = (hasMultipleAlbums && showSameAlbumOnly) ? videos.filter { $0.parentAlbumID == currentAlbumID } : videos
 
-        return ScrollViewReader { proxy in
+        return ScrollViewReader { (proxy: ScrollViewProxy) in
             ScrollView {
-                VStack(spacing: 0) {
-                    // コントロール類をスクロールビュー内に配置（リストと同期）
-                    VStack(spacing: 0) {
-                        topBar(compact: true, isOverlay: false)
-                        if videos[currentIndex].duration > 0 {
-                            videoSegmentsBar(width: availableWidth)
+                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    // スクロールして消える部分（上部）
+                    topBar(compact: true, isOverlay: false)
+                        .background(Color.appDarkSurface)
+                        .id("topBar")
+
+                    // ピン留めされる完全固定部分
+                    Section(header:
+                        VStack(spacing: 0) {
+                            if videos[currentIndex].duration > 0 {
+                                videoSegmentsBar(width: availableWidth)
+                            }
+                            seekBarRow()
+                                .padding(.horizontal, 14)
+                                .padding(.bottom, 12)
+                                .padding(.top, 8)
                         }
-                        bottomControls(compact: true, isOverlay: false)
-                    }
-                    .background(Color.appDarkSurface)
-                    .id("controls")
-                    
-                    // ヘッダー行
+                        .background(Color.appDarkSurface)
+                    ) {
+                        // リストと一緒にスクロールする下部コントロール（シャッフル等）
+                        playbackTogglesRow(compact: true)
+                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 14)
+                            .padding(.bottom, 16)
+                            .background(Color.appDarkSurface)
+
+                        // ヘッダー行
                         HStack {
-                    Text("再生中・他の動画")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.55))
-                    Spacer()
-                    Text("\(displayVideos.count)本")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.4))
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                
-                if hasMultipleAlbums {
-                    Picker("表示フィルター", selection: $showSameAlbumOnly) {
-                        Text("すべての動画").tag(false)
-                        Text("同じアルバム").tag(true)
-                    }
-                    .pickerStyle(SegmentedPickerStyle())
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 12)
-                }
-
-                if useGrid {
-                    // iPadなど横幅の広い端末ではグリッド表示
-                    let gridColumns = Array(repeating: GridItem(.flexible(), spacing: 12), count: upNextGridColumnCount(width: availableWidth))
-                    LazyVGrid(columns: gridColumns, spacing: 12) {
-                        ForEach(displayVideos, id: \.id) { video in
-                            let index = videos.firstIndex(where: { $0.id == video.id }) ?? 0
-                            Button { selectFromList(index) } label: {
-                                upNextGridCell(index: index, video: video)
-                            }
-                            .buttonStyle(.plain)
-                            .id(index)
+                            Text("再生中・他の動画")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.55))
+                            Spacer()
+                            Text("\(displayVideos.count)本")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.white.opacity(0.4))
                         }
-                    }
-                    .padding(.horizontal, 14)
-                } else {
-                    // iPhone等ではリスト表示
-                    LazyVStack(spacing: 0) {
-                        ForEach(displayVideos, id: \.id) { video in
-                            let index = videos.firstIndex(where: { $0.id == video.id }) ?? 0
-                            Button { selectFromList(index) } label: {
-                                upNextRow(index: index, video: video)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        
+                        if hasMultipleAlbums {
+                            Picker("表示フィルター", selection: $showSameAlbumOnly) {
+                                Text("すべての動画").tag(false)
+                                Text("同じアルバム").tag(true)
                             }
-                            .buttonStyle(.plain)
-                            .id(index)
+                            .pickerStyle(SegmentedPickerStyle())
+                            .padding(.horizontal, 14)
+                            .padding(.bottom, 12)
                         }
-                    }
-                }
 
-                Spacer().frame(height: 32)
+                        if useGrid {
+                            // iPadなど横幅の広い端末ではグリッド表示
+                            let gridColumns = Array(repeating: GridItem(.flexible(), spacing: 2, alignment: .top), count: upNextGridColumnCount(width: availableWidth))
+                            LazyVGrid(columns: gridColumns, spacing: 12) {
+                                ForEach(displayVideos, id: \.id) { video in
+                                    let index = videos.firstIndex(where: { $0.id == video.id }) ?? 0
+                                    Button { selectFromList(index) } label: {
+                                        upNextGridCell(index: index, video: video)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .id(index)
+                                }
+                            }
+                            .padding(.horizontal, 0)
+                        } else {
+                            // iPhone等ではリスト表示
+                            LazyVStack(spacing: 0) {
+                                ForEach(displayVideos, id: \.id) { video in
+                                    let index = videos.firstIndex(where: { $0.id == video.id }) ?? 0
+                                    Button { selectFromList(index) } label: {
+                                        upNextRow(index: index, video: video)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .id(index)
+                                }
+                            }
+                        }
+
+                        Spacer().frame(height: 32)
                     }
-                }
-                .scrollIndicators(.hidden)
-                .onChange(of: currentIndex) { _, _ in
-                    withAnimation(.easeInOut) { proxy.scrollTo("controls", anchor: .top) }
-                }
-                .onAppear {
-                    // 初期表示時はコントロールを確実に見せるため一番上にスクロール
-                    proxy.scrollTo("controls", anchor: .top)
                 }
             }
+            .scrollIndicators(.hidden)
+            .onChange(of: currentIndex) { _, _ in
+                withAnimation(.easeInOut) { proxy.scrollTo("topBar", anchor: .top) }
+            }
+            .onAppear {
+                proxy.scrollTo("topBar", anchor: .top)
+            }
         }
+    }
 
     /// 画面幅に応じたグリッド列数を計算
     private func upNextGridColumnCount(width: CGFloat) -> Int {
@@ -1728,14 +1982,15 @@ private struct DraggablePlayerView: View {
                 AsyncImage(url: ServerAuth.mediaURL(address: serverAddress, path: "/thumbnail/\(video.id)")) { phase in
                     switch phase {
                     case .success(let image):
-                        image.resizable().aspectRatio(contentMode: .fill)
+                        Color.clear.overlay(
+                            image.resizable().scaledToFill()
+                        )
                     case .failure:
                         ZStack { Color.appDarkSurface; Image(systemName: "film").foregroundStyle(.white.opacity(0.25)) }
                     default:
                         Color.appDarkSurface
                     }
                 }
-                .frame(minHeight: 100)
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .overlay {
@@ -1758,7 +2013,7 @@ private struct DraggablePlayerView: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(video.filename)
+                Text(video.filename.cleanVideoTitle)
                     .font(.caption.weight(isCurrent ? .bold : .medium))
                     .foregroundStyle(isCurrent ? Color.appGold : .white)
                     .lineLimit(2)
@@ -1823,7 +2078,7 @@ private struct DraggablePlayerView: View {
             }
 
             VStack(alignment: .leading, spacing: 5) {
-                Text(video.filename)
+                Text(video.filename.cleanVideoTitle)
                     .font(.subheadline.weight(isCurrent ? .bold : .medium))
                     .foregroundStyle(isCurrent ? Color.appGold : .white)
                     .lineLimit(2)
@@ -1937,7 +2192,7 @@ private struct DraggablePlayerView: View {
                     .clipShape(Circle())
             }
 
-            Text(videos[currentIndex].filename)
+            Text(videos[currentIndex].filename.cleanVideoTitle)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.white)
                 .lineLimit(1)
@@ -2031,46 +2286,53 @@ private struct DraggablePlayerView: View {
         }
     }
 
+    private func seekBarRow() -> some View {
+        HStack(spacing: 10) {
+            Text((isScrubbing ? scrubTarget : playerManager.currentTime).mediaDurationText)
+                .font(.caption.weight(.semibold).monospacedDigit())
+                .foregroundStyle(.white)
+                .frame(minWidth: 40, alignment: .leading)
+
+            seekBar
+
+            Text(playerManager.duration.mediaDurationText)
+                .font(.caption.weight(.semibold).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.75))
+                .frame(minWidth: 40, alignment: .trailing)
+        }
+    }
+
+    private func playbackTogglesRow(compact: Bool) -> some View {
+        HStack(spacing: compact ? 18 : 26) {
+            controlToggle(icon: "shuffle", active: isShuffle) { isShuffle.toggle(); startHideTimer() }
+            controlToggle(icon: repeatMode == .one ? "repeat.1" : "repeat", active: repeatMode != .off) { cycleRepeatMode(); startHideTimer() }
+            controlToggle(icon: "infinity", active: isContinuous) { isContinuous.toggle(); startHideTimer() }
+            Menu {
+                Button(isSlideshow ? "スライドショーを停止" : "スライドショーを開始") { toggleSlideshow(); startHideTimer() }
+                Picker("1本あたりの秒数", selection: $slideshowClipDuration) {
+                    Text("5秒").tag(5.0)
+                    Text("10秒").tag(10.0)
+                    Text("15秒").tag(15.0)
+                    Text("30秒").tag(30.0)
+                    Text("60秒").tag(60.0)
+                }
+            } label: {
+                Image(systemName: "play.square.stack")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(isSlideshow ? Color.appDarkBackground : .white.opacity(0.75))
+                    .frame(width: 40, height: 40)
+                    .background(isSlideshow ? AnyShapeStyle(AppTheme.goldGradient) : AnyShapeStyle(.white.opacity(0.12)))
+                    .clipShape(Circle())
+                    .shadow(color: isSlideshow ? Color.appGold.opacity(0.4) : .clear, radius: 6)
+            }
+        }
+    }
+
     /// 下部: シークバー + 再生モードトグル
     private func bottomControls(compact: Bool, isOverlay: Bool = true) -> some View {
         VStack(spacing: 12) {
-            HStack(spacing: 10) {
-                Text((isScrubbing ? scrubTarget : playerManager.currentTime).mediaDurationText)
-                    .font(.caption.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(.white)
-                    .frame(minWidth: 40, alignment: .leading)
-
-                seekBar
-
-                Text(playerManager.duration.mediaDurationText)
-                    .font(.caption.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.75))
-                    .frame(minWidth: 40, alignment: .trailing)
-            }
-
-            HStack(spacing: compact ? 18 : 26) {
-                controlToggle(icon: "shuffle", active: isShuffle) { isShuffle.toggle(); startHideTimer() }
-                controlToggle(icon: repeatMode == .one ? "repeat.1" : "repeat", active: repeatMode != .off) { cycleRepeatMode(); startHideTimer() }
-                controlToggle(icon: "infinity", active: isContinuous) { isContinuous.toggle(); startHideTimer() }
-                Menu {
-                    Button(isSlideshow ? "スライドショーを停止" : "スライドショーを開始") { toggleSlideshow(); startHideTimer() }
-                    Picker("1本あたりの秒数", selection: $slideshowClipDuration) {
-                        Text("5秒").tag(5.0)
-                        Text("10秒").tag(10.0)
-                        Text("15秒").tag(15.0)
-                        Text("30秒").tag(30.0)
-                        Text("60秒").tag(60.0)
-                    }
-                } label: {
-                    Image(systemName: "play.square.stack")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(isSlideshow ? Color.appDarkBackground : .white.opacity(0.75))
-                        .frame(width: 40, height: 40)
-                        .background(isSlideshow ? AnyShapeStyle(AppTheme.goldGradient) : AnyShapeStyle(.white.opacity(0.12)))
-                        .clipShape(Circle())
-                        .shadow(color: isSlideshow ? Color.appGold.opacity(0.4) : .clear, radius: 6)
-                }
-            }
+            seekBarRow()
+            playbackTogglesRow(compact: compact)
         }
         .padding(.horizontal, compact ? 14 : 20)
         .padding(.top, compact ? (isOverlay ? 16 : 8) : 50)
@@ -2319,10 +2581,23 @@ private struct DraggablePlayerView: View {
     }
 
     private func cleanupProxies() {
+        guard videos.indices.contains(currentIndex) else { return }
         let video = videos[currentIndex]
         guard let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(video.id)/proxy") else { return }
         let req = ServerAuth.request(url, address: serverAddress, method: "DELETE")
         Task { _ = try? await URLSession.shared.data(for: req) }
+    }
+
+    private func syncCurrentIndexWithPlayingVideo() {
+        guard !videos.isEmpty else { return }
+        if let targetID = playingVideoID ?? videoToPlay?.id,
+           let resolvedIndex = videos.firstIndex(where: { $0.id == targetID }) {
+            if currentIndex != resolvedIndex {
+                currentIndex = resolvedIndex
+            }
+        } else if !videos.indices.contains(currentIndex) {
+            currentIndex = max(0, min(currentIndex, videos.count - 1))
+        }
     }
     
     private func changeVideo(offset: Int) {
@@ -2799,29 +3074,38 @@ struct FeedVideoFrameKey: PreferenceKey {
     }
 }
 
+struct ShortsVideoFrameKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
 struct FeedInlinePlayerView: View {
     let video: RemoteVideoInfo
     let serverAddress: String
     let width: CGFloat
     let isOverlayActive: Bool
+    var playbackKey: String? = nil
     
     @State private var player: AVPlayer?
     @State private var isReady: Bool = false
     @State private var endObserver: Any?
+    @State private var timeObserverToken: Any?
     @AppStorage("feedVideoMuted") private var isMuted: Bool = false
     
     var body: some View {
         ZStack {
             Color.black
             if let p = player {
-                PlayerLayerView(player: p)
+                PlayerLayerView(player: p, videoGravity: .resizeAspectFill)
                     .allowsHitTesting(false)
             }
             if !isReady {
                 RemoteVideoThumbnailView(
                     thumbnailURL: ServerAuth.mediaURL(address: serverAddress, path: "/thumbnail/\(video.id)", query: [URLQueryItem(name: "original", value: "true")]),
                     duration: video.duration,
-                    contentMode: .fit,
+                    contentMode: .fill,
                     forceSquare: false
                 )
             }
@@ -2855,18 +3139,17 @@ struct FeedInlinePlayerView: View {
         .onChange(of: isOverlayActive) { _, active in
             player?.isMuted = isMuted || active
         }
+        .onChange(of: video.id) { _, _ in
+            resetPlayer()
+            setupPlayer()
+        }
         .onDisappear {
-            if let obs = endObserver {
-                NotificationCenter.default.removeObserver(obs)
-                endObserver = nil
-            }
-            player?.pause()
-            player?.replaceCurrentItem(with: nil)
-            player = nil
+            resetPlayer()
         }
     }
     
     private func setupPlayer() {
+        resetPlayer()
         guard let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(video.id)") else { return }
         let p = AVPlayer(url: url)
         p.isMuted = isMuted || isOverlayActive
@@ -2875,14 +3158,21 @@ struct FeedInlinePlayerView: View {
         // 真ん中に重みを置いたランダムな開始位置
         let fraction = (Double.random(in: 0...1) + Double.random(in: 0...1)) / 2.0
         let targetSec = max(0, min(dur, dur * fraction))
+        let key = playbackKey ?? video.id
+        FeedPlaybackManager.shared.times[key] = targetSec
+        FeedPlaybackManager.shared.times[video.id] = targetSec
         
-        p.seek(to: CMTime(seconds: targetSec, preferredTimescale: 600)) { _ in
-            p.play()
-            withAnimation(.easeInOut(duration: 0.3)) { isReady = true }
-        }
         self.player = p
+        p.seek(to: CMTime(seconds: targetSec, preferredTimescale: 600)) { _ in
+            DispatchQueue.main.async {
+                guard player === p else { return }
+                p.play()
+                withAnimation(.easeInOut(duration: 0.3)) { isReady = true }
+            }
+        }
         
-        p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { time in
+        timeObserverToken = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { time in
+            FeedPlaybackManager.shared.times[key] = time.seconds
             FeedPlaybackManager.shared.times[video.id] = time.seconds
         }
         
@@ -2890,5 +3180,157 @@ struct FeedInlinePlayerView: View {
             p.seek(to: .zero)
             p.play()
         }
+    }
+
+    private func resetPlayer() {
+        if let obs = endObserver {
+            NotificationCenter.default.removeObserver(obs)
+            endObserver = nil
+        }
+        if let token = timeObserverToken, let currentPlayer = player {
+            currentPlayer.removeTimeObserver(token)
+            timeObserverToken = nil
+        }
+        player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        player = nil
+        isReady = false
+    }
+}
+
+extension String {
+    /// 動画のファイル名から拡張子や不要な文字列（UUID、タイムスタンプ、ランダムなハッシュ値など）を取り除き、
+    /// UI表示用のクリーンなタイトルを生成します。
+    var cleanVideoTitle: String {
+        // 1. 拡張子を削除
+        var text = (self as NSString).deletingPathExtension
+        let originalText = text
+        
+        // 2. ユーザーが設定した除外文字列を削除
+        if let words = UserDefaults.standard.array(forKey: "excludedTitleWordsList") as? [String] {
+            for word in words {
+                let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    text = text.replacingOccurrences(of: trimmed, with: " ", options: .caseInsensitive)
+                }
+            }
+        }
+        
+        // 3. 不要なパターンの削除 (記号を消さずに、単語の境界を記号や空白で判定する)
+        // UUID
+        text = text.replacingOccurrences(of: "(?<=[^A-Za-z0-9]|^)[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?=[^A-Za-z0-9]|$)", with: "", options: .regularExpression)
+        
+        // 6桁以上の数字の羅列（日付やタイムスタンプ、カメラのシーケンス番号など）
+        text = text.replacingOccurrences(of: "(?<=[^A-Za-z0-9]|^)\\d{6,}(?=[^A-Za-z0-9]|$)", with: "", options: .regularExpression)
+        
+        // 接頭辞の削除 (大文字小文字を区別しない)
+        text = text.replacingOccurrences(of: "(?<=[^A-Za-z0-9]|^)(LINE_ALBUM_|IMG_|VID_|RPReplay_)", with: "", options: [.regularExpression, .caseInsensitive])
+        
+        // 英数字が混ざった8文字以上のランダム文字列（ハッシュ値など）
+        // (?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\\d) -> 単語内に英字と数字が両方含まれることを保証
+        text = text.removingMatches(
+            matching: "(?<=[^A-Za-z0-9]|^)(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\\d)[A-Za-z0-9]{8,}(?=[^A-Za-z0-9]|$)",
+            keepingIfContainsRealWord: true
+        )
+        
+        // 数字が含まれないアルファベットのみのランダム文字列対策（例: zJXShpZkIEIlXY）
+        // 10文字以上で、大文字と小文字が混在し、かつ「小文字が3文字以上連続しない」不自然な単語（ハッシュ・ID特有のケース）
+        text = text.removingMatches(
+            matching: "(?<=[^A-Za-z0-9]|^)(?=.*[A-Z])(?=.*[a-z])(?![A-Za-z0-9]*[a-z]{3})[A-Za-z0-9]{10,}(?=[^A-Za-z0-9]|$)",
+            keepingIfContainsRealWord: true
+        )
+        
+        // URLエンコードされた文字列があれば戻す（%20など）
+        text = text.removingPercentEncoding ?? text
+        
+        // 削除後に残った不要な記号の連続や、先頭・末尾の記号・空白を綺麗にする
+        text = text.replacingOccurrences(of: "_{2,}", with: "_", options: .regularExpression)
+        text = text.replacingOccurrences(of: "-{2,}", with: "-", options: .regularExpression)
+        text = text.replacingOccurrences(of: "^[_\\-~〜\\s\\[\\]()]+|[_\\-~〜\\s\\[\\]()]+$", with: "", options: .regularExpression)
+        
+        // 連続するスペースを1つにする
+        text = text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // もし完全にランダムな文字列のみで空になってしまったら、元々のファイル名（拡張子なし）をそのまま採用する
+        if text.isEmpty {
+            return originalText
+        }
+        
+        return text
+    }
+    
+    /// 正規表現にマッチした部分文字列を削除します。keepingIfContainsRealWord が true の場合、
+    /// マッチした文字列の中に実在する単語が含まれていれば削除せずに残します。
+    func removingMatches(matching pattern: String, keepingIfContainsRealWord: Bool) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return self }
+        let nsString = self as NSString
+        let matches = regex.matches(in: self, range: NSRange(location: 0, length: nsString.length))
+        
+        var result = self
+        // 後ろから置換することで、インデックスのズレを防ぐ
+        for match in matches.reversed() {
+            let matchedString = nsString.substring(with: match.range)
+            var shouldKeep = false
+            
+            if keepingIfContainsRealWord && matchedString.containsRealWord() {
+                shouldKeep = true
+            }
+            
+            if !shouldKeep {
+                if let rangeToReplace = Range(match.range, in: result) {
+                    result.replaceSubrange(rangeToReplace, with: "")
+                }
+            }
+        }
+        return result
+    }
+    
+    /// 文字列の中に実在する単語（英語などの辞書に載っている単語）が含まれているかを判定します
+    func containsRealWord() -> Bool {
+        let checker = UITextChecker()
+        let nsText = self as NSString
+        
+        // 1. 連続したアルファベットのブロックを抽出してチェック
+        let letterBlocks = self.components(separatedBy: CharacterSet.letters.inverted).filter { $0.count >= 3 }
+        for block in letterBlocks {
+            let range = NSRange(location: 0, length: block.utf16.count)
+            if checker.rangeOfMisspelledWord(in: block, range: range, startingAt: 0, wrap: false, language: "en_US").location == NSNotFound {
+                return true
+            }
+        }
+        
+        // 2. キャメルケース（CamelCase）などで区切ってチェック（例: PartyVlog01 -> Party, Vlog）
+        if let camelRegex = try? NSRegularExpression(pattern: "([A-Z]?[a-z]+|[A-Z]+(?![a-z]))") {
+            let matches = camelRegex.matches(in: self, range: NSRange(location: 0, length: nsText.length))
+            for match in matches {
+                let word = nsText.substring(with: match.range)
+                if word.count >= 3 {
+                    let range = NSRange(location: 0, length: word.utf16.count)
+                    if checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: "en_US").location == NSNotFound {
+                        return true
+                    }
+                }
+            }
+        }
+        
+        // 3. 最後のフォールバック：4〜8文字の部分文字列をすべてチェックし、辞書に存在すればOKとする
+        // （長すぎる文字列での処理落ちを防ぐため、元の文字列が50文字以下の場合のみ）
+        if self.count < 50 {
+            let lowerText = self.lowercased()
+            let chars = Array(lowerText)
+            if chars.count >= 4 {
+                for i in 0...(chars.count - 4) {
+                    for j in (i + 3)..<min(chars.count, i + 8) {
+                        let sub = String(chars[i...j])
+                        let range = NSRange(location: 0, length: sub.utf16.count)
+                        if checker.rangeOfMisspelledWord(in: sub, range: range, startingAt: 0, wrap: false, language: "en_US").location == NSNotFound {
+                            return true
+                        }
+                    }
+                }
+            }
+        }
+        
+        return false
     }
 }

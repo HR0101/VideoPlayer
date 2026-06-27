@@ -6,6 +6,7 @@ import UIKit
 // カスタムコントロールを重ねるためのプレイヤー表示ビュー
 struct PlayerLayerView: UIViewRepresentable {
     let player: AVPlayer
+    var videoGravity: AVLayerVideoGravity = .resizeAspect
 
     final class PlayerContainerUIView: UIView {
         override static var layerClass: AnyClass { AVPlayerLayer.self }
@@ -16,13 +17,16 @@ struct PlayerLayerView: UIViewRepresentable {
         let view = PlayerContainerUIView()
         view.backgroundColor = .clear
         view.playerLayer.player = player
-        view.playerLayer.videoGravity = .resizeAspect
+        view.playerLayer.videoGravity = videoGravity
         return view
     }
 
     func updateUIView(_ uiView: PlayerContainerUIView, context: Context) {
         if uiView.playerLayer.player !== player {
             uiView.playerLayer.player = player
+        }
+        if uiView.playerLayer.videoGravity != videoGravity {
+            uiView.playerLayer.videoGravity = videoGravity
         }
     }
 }

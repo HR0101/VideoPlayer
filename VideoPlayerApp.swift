@@ -1,4 +1,11 @@
 import SwiftUI
+import MediaServerKit
+
+class AppNavigationState: ObservableObject {
+    @Published var selectedTab: Int = 0
+    @Published var targetShortsVideo: RemoteVideoInfo? = nil
+    @Published var shortsJumpTrigger: UUID = UUID()
+}
 
 @main
 struct VideoPlayerApp: App {
@@ -6,6 +13,7 @@ struct VideoPlayerApp: App {
     @StateObject private var serverBrowser = ServerBrowser()
     @StateObject private var serverManager = ServerManager()
     @StateObject private var downloadManager = DownloadManager()
+    @StateObject private var navState = AppNavigationState()
 
     var body: some Scene {
         WindowGroup {
@@ -15,6 +23,7 @@ struct VideoPlayerApp: App {
                     .environmentObject(serverBrowser)
                     .environmentObject(serverManager)
                     .environmentObject(downloadManager)
+                    .environmentObject(navState)
 
                 if downloadManager.isDownloading || downloadManager.successMessage != nil || downloadManager.errorMessage != nil {
                     DownloadStatusOverlay()

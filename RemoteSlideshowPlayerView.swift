@@ -1,6 +1,116 @@
 import SwiftUI
 import AVKit
 import MediaServerKit
+import Vision
+
+struct VideoAnalyzer {
+    static func analyzeCenter(item: AVPlayerItem) async -> CGPoint? {
+        guard let asset = item.asset as? AVURLAsset else { return nil }
+        let imageGenerator = AVAssetImageGenerator(asset: asset)
+        imageGenerator.appliesPreferredTrackTransform = true
+        imageGenerator.maximumSize = CGSize(width: 300, height: 300)
+        
+        do {
+            let seconds = item.duration.isValid && item.duration.isNumeric ? min(1.0, item.duration.seconds / 2.0) : 0.5
+            let time = CMTime(seconds: seconds, preferredTimescale: 600)
+            let (cgImage, _) = try await imageGenerator.image(at: time)
+            
+            let request = VNDetectFaceRectanglesRequest()
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            try handler.perform([request])
+            
+            if let results = request.results, !results.isEmpty {
+                if let brightest = results.max(by: { averageBrightness(of: $0.boundingBox, in: cgImage) < averageBrightness(of: $1.boundingBox, in: cgImage) }) {
+                    let x = brightest.boundingBox.midX
+                    let y = 1.0 - brightest.boundingBox.midY
+                    return CGPoint(x: x, y: y)
+                }
+            }
+            
+            let saliencyRequest = VNGenerateAttentionBasedSaliencyImageRequest()
+            try handler.perform([saliencyRequest])
+            
+            if let results = saliencyRequest.results, let first = results.first, let objects = first.salientObjects, !objects.isEmpty {
+                if let brightest = objects.max(by: { averageBrightness(of: $0.boundingBox, in: cgImage) < averageBrightness(of: $1.boundingBox, in: cgImage) }) {
+                    let x = brightest.boundingBox.midX
+                    let y = 1.0 - brightest.boundingBox.midY
+                    return CGPoint(x: x, y: y)
+                }
+            }
+            
+            return nil
+        } catch {
+            return nil
+        }
+    }
+    
+    private static func averageBrightness(of normalizedRect: CGRect, in image: CGImage) -> Double {
+        let x = normalizedRect.origin.x * CGFloat(image.width)
+        // normalized Y in Vision is bottom-left origin
+        let y = (1.0 - normalizedRect.origin.y - normalizedRect.height) * CGFloat(image.height)
+        let width = normalizedRect.width * CGFloat(image.width)
+        let height = normalizedRect.height * CGFloat(image.height)
+        
+        let cropRect = CGRect(x: x, y: y, width: width, height: height)
+        guard let cropped = image.cropping(to: cropRect) else { return 0 }
+        
+        var bitmap = [UInt8](repeating: 0, count: 4)
+        let context = CGContext(data: &bitmap,
+                                width: 1,
+                                height: 1,
+                                bitsPerComponent: 8,
+                                bytesPerRow: 4,
+                                space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        
+        context?.draw(cropped, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        
+        let r = Double(bitmap[0])
+        let g = Double(bitmap[1])
+        let b = Double(bitmap[2])
+        return 0.299 * r + 0.587 * g + 0.114 * b
+    }
+}
+
+struct SmartVideoPanView: View {
+    let player: AVPlayer
+    let videoSize: CGSize
+    let focusCenter: CGPoint?
+    let scaleParam: Double
+    
+    var body: some View {
+        if scaleParam > 0 {
+            GeometryReader { geo in
+                let viewAspect = geo.size.width / geo.size.height
+                let videoAspect = videoSize.width > 0 && videoSize.height > 0 ? videoSize.width / videoSize.height : viewAspect
+                
+                let fillScale: CGFloat = {
+                    if videoAspect > viewAspect {
+                        return geo.size.height / (geo.size.width / videoAspect)
+                    } else {
+                        return geo.size.width / (geo.size.height * videoAspect)
+                    }
+                }()
+                
+                let finalScale: CGFloat = 1.0 + (fillScale - 1.0) * CGFloat(scaleParam)
+                
+                let maxOffsetX = max(0, (geo.size.width * finalScale - geo.size.width) / 2)
+                let focusX = focusCenter?.x ?? 0.5
+                let targetOffsetX = (0.5 - focusX) * (geo.size.width * finalScale)
+                let clampedOffsetX = min(max(targetOffsetX, -maxOffsetX), maxOffsetX)
+                
+                PlayerLayerView(player: player, videoGravity: .resizeAspect)
+                    .scaleEffect(finalScale)
+                    .offset(x: clampedOffsetX, y: 0)
+                    .animation(.easeInOut(duration: 0.8), value: focusCenter)
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
+            }
+        } else {
+            PlayerLayerView(player: player, videoGravity: .resizeAspect)
+        }
+    }
+}
 
 // MARK: - スライドショー（サーバーの複数動画を指定秒ずつ連続再生）
 
@@ -10,6 +120,8 @@ final class RemoteSlideshowModel: ObservableObject {
     @Published var index = 0
     @Published var isPlaying = true
     @Published var isLoading = false
+    @Published var videoFocusCenter: CGPoint? = nil
+    @Published var videoSize: CGSize = .zero
 
     var videos: [RemoteVideoInfo] = []
     var serverAddress: String = ""
@@ -21,7 +133,7 @@ final class RemoteSlideshowModel: ObservableObject {
     private var clipRetry = 0
     private let maxClipRetry = 3
 
-    var currentTitle: String { videos.indices.contains(index) ? videos[index].filename : "" }
+    var currentTitle: String { videos.indices.contains(index) ? videos[index].filename.cleanVideoTitle : "" }
 
     func setup(videos: [RemoteVideoInfo], serverAddress: String) {
         self.videos = videos
@@ -84,6 +196,15 @@ final class RemoteSlideshowModel: ObservableObject {
                 }
                 self.clipRetry = 0
                 self.isLoading = false
+                self.videoSize = observedItem.presentationSize
+                Task {
+                    if let center = await VideoAnalyzer.analyzeCenter(item: observedItem) {
+                        await MainActor.run { self.videoFocusCenter = center }
+                    } else {
+                        await MainActor.run { self.videoFocusCenter = CGPoint(x: 0.5, y: 0.5) }
+                    }
+                }
+                
                 let dur = v.duration
                 let start = dur > self.clipDuration ? Double.random(in: 0...(dur - self.clipDuration)) : 0
                 self.player.seek(to: CMTime(seconds: start, preferredTimescale: 600)) { _ in
@@ -132,6 +253,7 @@ struct RemoteSlideshowPlayerView: View {
     let videos: [RemoteVideoInfo]
     let serverAddress: String
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var appSettings: AppSettings
     @StateObject private var model = RemoteSlideshowModel()
 
     private enum Phase { case setup, playing }
@@ -183,7 +305,8 @@ struct RemoteSlideshowPlayerView: View {
 
     private var playerView: some View {
         ZStack {
-            PlayerLayerView(player: model.player).ignoresSafeArea()
+            SmartVideoPanView(player: model.player, videoSize: model.videoSize, focusCenter: model.videoFocusCenter, scaleParam: appSettings.shortsVideoFillScale)
+                .ignoresSafeArea()
 
             if model.isLoading {
                 ProgressView()
@@ -247,6 +370,12 @@ struct RemoteSlideshowPlayerView: View {
     }
 }
 
+private struct FullVideoLaunchRequest: Identifiable {
+    let id = UUID()
+    let video: RemoteVideoInfo
+    let startTime: Double
+}
+
 @MainActor
 final class RemoteShortsModel: ObservableObject {
     @Published var player = AVPlayer()
@@ -255,6 +384,8 @@ final class RemoteShortsModel: ObservableObject {
     @Published var isPlaying = true
     @Published var progress: Double = 0.0
     @Published var isScrubbing = false
+    @Published var videoFocusCenter: CGPoint? = nil
+    @Published var videoSize: CGSize = .zero
 
     private var shuffledVideos: [RemoteVideoInfo] = []
     private var index = 0
@@ -265,6 +396,12 @@ final class RemoteShortsModel: ObservableObject {
     
     private var nextPlayer: AVPlayer?
     private var nextClipStartTime: Double = 0
+    private var pendingInitialStartTime: Double?
+    private let requestedInitialVideo: RemoteVideoInfo?
+    private let requestedInitialVideoID: String?
+    private var didResolveInitialVideo = false
+    private var didStart = false
+    private let minimumRemainingDuration: Double = 1.0
     
     private var advanceTask: Task<Void, Never>?
     private var endObserver: NSObjectProtocol?
@@ -272,15 +409,22 @@ final class RemoteShortsModel: ObservableObject {
     private var clipRetry = 0
     private let maxClipRetry = 3
 
-    init(videos: [RemoteVideoInfo], serverAddress: String) {
+    init(videos: [RemoteVideoInfo], serverAddress: String, initialVideo: RemoteVideoInfo? = nil, initialStartTime: Double? = nil) {
         // 写真を除外し、ランダムにシャッフルする
-        self.shuffledVideos = videos.filter { !$0.isPhoto }.shuffled()
-        self.serverAddress = serverAddress
+        var filtered = videos.filter { !$0.isPhoto }
         
-        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            DispatchQueue.main.async { self.next() }
+        self.requestedInitialVideo = initialVideo
+        self.requestedInitialVideoID = initialVideo?.id
+
+        if let initial = initialVideo {
+            filtered.removeAll(where: { $0.id == initial.id })
+            self.shuffledVideos = [initial] + filtered.shuffled()
+        } else {
+            self.shuffledVideos = filtered.shuffled()
         }
+        
+        self.serverAddress = serverAddress
+        self.pendingInitialStartTime = initialStartTime
         
         setupTimeObserver()
     }
@@ -308,8 +452,43 @@ final class RemoteShortsModel: ObservableObject {
         advanceTask?.cancel()
     }
 
+    func jumpToVideo(_ video: RemoteVideoInfo, startTime: Double? = nil) {
+        if let existingIndex = shuffledVideos.firstIndex(where: { $0.id == video.id }) {
+            index = existingIndex
+        } else {
+            shuffledVideos.insert(video, at: index)
+        }
+        pendingInitialStartTime = startTime
+        playClip()
+        if !isPlaying {
+            player.play()
+            isPlaying = true
+        }
+    }
+
+    var currentPlaybackTime: Double {
+        let seconds = player.currentTime().seconds
+        guard seconds.isFinite else { return clipStartTime }
+        return max(0, seconds)
+    }
+
+    func updateVideos(_ newVideos: [RemoteVideoInfo]) {
+        let filtered = newVideos.filter { !$0.isPhoto }
+        for v in filtered {
+            if !shuffledVideos.contains(where: { $0.id == v.id }) {
+                shuffledVideos.append(v)
+            }
+        }
+        if !didStart && !shuffledVideos.isEmpty {
+            start()
+        }
+    }
+
     func start() {
+        guard !didStart else { return }
         if shuffledVideos.isEmpty { return }
+        didStart = true
+        pinRequestedInitialVideoIfNeeded()
         ServerAuth.prewarm(address: serverAddress, videoIDs: shuffledVideos.prefix(5).map { $0.id })
         playClip()
     }
@@ -326,23 +505,39 @@ final class RemoteShortsModel: ObservableObject {
             shuffledVideos.shuffle()
             index = 0
         }
+        forceRequestedInitialVideoIfNeeded()
         
         let v = shuffledVideos[index]
         currentVideo = v
+        #if DEBUG
+        if let requestedInitialVideoID {
+            print("ShortsPlay requestedID=\(requestedInitialVideoID) currentID=\(v.id) title=\(v.filename)")
+        }
+        #endif
         guard let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(v.id)") else { return }
 
         isLoading = true
         let startTarget: Double
         let oldPlayer = self.player
+        let requestedStartTime = isRetry ? nil : pendingInitialStartTime
+        if requestedStartTime != nil {
+            pendingInitialStartTime = nil
+        }
         
-        if let nextP = nextPlayer, (nextP.currentItem?.asset as? AVURLAsset)?.url == url {
+        if let nextP = nextPlayer, requestedStartTime == nil, (nextP.currentItem?.asset as? AVURLAsset)?.url == url {
             self.player = nextP
             startTarget = nextClipStartTime
             self.nextPlayer = nil
         } else {
             self.player = AVPlayer(url: url)
             let dur = v.duration
-            startTarget = dur > self.clipDuration ? Double.random(in: 0...(dur - self.clipDuration)) : 0
+            if let requestedStartTime {
+                startTarget = clampedClipStartTime(requestedStartTime, duration: dur)
+            } else if isRetry {
+                startTarget = clipStartTime
+            } else {
+                startTarget = dur > self.clipDuration ? Double.random(in: 0...(dur - self.clipDuration)) : 0
+            }
         }
         
         if oldPlayer !== self.player {
@@ -355,8 +550,18 @@ final class RemoteShortsModel: ObservableObject {
             setupTimeObserver()
         }
         
+        if let obs = endObserver {
+            NotificationCenter.default.removeObserver(obs)
+            endObserver = nil
+        }
+        
         self.clipStartTime = startTarget
         guard let item = self.player.currentItem else { return }
+        
+        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            DispatchQueue.main.async { self.next() }
+        }
 
         statusObserver = item.observe(\.status, options: [.initial, .new]) { [weak self] observedItem, _ in
             guard let self else { return }
@@ -386,6 +591,14 @@ final class RemoteShortsModel: ObservableObject {
 
                 self.clipRetry = 0
                 self.isLoading = false
+                self.videoSize = observedItem.presentationSize
+                Task {
+                    if let center = await VideoAnalyzer.analyzeCenter(item: observedItem) {
+                        await MainActor.run { self.videoFocusCenter = center }
+                    } else {
+                        await MainActor.run { self.videoFocusCenter = CGPoint(x: 0.5, y: 0.5) }
+                    }
+                }
                 
                 self.player.seek(to: CMTime(seconds: self.clipStartTime, preferredTimescale: 600)) { _ in
                     DispatchQueue.main.async {
@@ -461,22 +674,64 @@ final class RemoteShortsModel: ObservableObject {
             self?.scheduleAdvance()
         }
     }
+
+    private func clampedClipStartTime(_ startTime: Double, duration: Double) -> Double {
+        guard startTime.isFinite, duration.isFinite, duration > 0 else { return 0 }
+        let maxStart = max(0, duration - minimumRemainingDuration)
+        return min(max(0, startTime), maxStart)
+    }
+
+    private func pinRequestedInitialVideoIfNeeded() {
+        forceRequestedInitialVideoIfNeeded()
+    }
+
+    private func forceRequestedInitialVideoIfNeeded() {
+        guard !didResolveInitialVideo, let requestedInitialVideoID else { return }
+        if let requestedInitialVideo {
+            shuffledVideos.removeAll { $0.id == requestedInitialVideoID }
+            shuffledVideos.insert(requestedInitialVideo, at: 0)
+            index = 0
+            didResolveInitialVideo = true
+            return
+        }
+
+        guard let initialIndex = shuffledVideos.firstIndex(where: { $0.id == requestedInitialVideoID }) else { return }
+        guard initialIndex != 0 else {
+            index = 0
+            didResolveInitialVideo = true
+            return
+        }
+        let initial = shuffledVideos.remove(at: initialIndex)
+        shuffledVideos.insert(initial, at: 0)
+        index = 0
+        didResolveInitialVideo = true
+    }
 }
 
 struct RemoteShortsPlayerView: View {
     @StateObject private var model: RemoteShortsModel
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var appSettings: AppSettings
+    @EnvironmentObject var navState: AppNavigationState
     
     @ObservedObject private var favorites = FavoritesManager.shared
     @ObservedObject private var shortsFavorites = ShortsFavoritesManager.shared
     @State private var showInfoSheet = false
-    @State private var jumpToFullVideo: RemoteVideoInfo? = nil
+    @State private var jumpToFullVideo: FullVideoLaunchRequest? = nil
     
+    let videos: [RemoteVideoInfo]
     let allServerAlbums: [RemoteAlbumInfo]
+    let initialVideoToPlay: RemoteVideoInfo?
+    let initialStartTime: Double?
+    var onPlayStateChanged: ((Bool) -> Void)?
 
-    init(videos: [RemoteVideoInfo], serverAddress: String, allServerAlbums: [RemoteAlbumInfo]) {
-        _model = StateObject(wrappedValue: RemoteShortsModel(videos: videos, serverAddress: serverAddress))
+    init(videos: [RemoteVideoInfo], serverAddress: String, allServerAlbums: [RemoteAlbumInfo], initialVideoToPlay: RemoteVideoInfo? = nil, initialStartTime: Double? = nil, onPlayStateChanged: ((Bool) -> Void)? = nil) {
+        _model = StateObject(wrappedValue: RemoteShortsModel(videos: videos, serverAddress: serverAddress, initialVideo: initialVideoToPlay, initialStartTime: initialStartTime))
+        self.videos = videos
         self.allServerAlbums = allServerAlbums
+        self.initialVideoToPlay = initialVideoToPlay
+        self.initialStartTime = initialStartTime
+        self.onPlayStateChanged = onPlayStateChanged
     }
 
     var body: some View {
@@ -487,7 +742,7 @@ struct RemoteShortsPlayerView: View {
                 ProgressView().tint(.white)
             } else {
                 // Video Layer
-                PlayerLayerView(player: model.player)
+                SmartVideoPanView(player: model.player, videoSize: model.videoSize, focusCenter: model.videoFocusCenter, scaleParam: appSettings.shortsVideoFillScale)
                     .ignoresSafeArea()
                     .onTapGesture {
                         model.togglePlay()
@@ -506,88 +761,29 @@ struct RemoteShortsPlayerView: View {
 
                 // Overlay Controls
                 VStack {
-                    HStack {
-                        Button(action: { dismiss() }) {
-                            Image(systemName: "chevron.down")
-                                .font(.title3.weight(.bold))
-                                .foregroundColor(.white)
-                                .padding(12)
-                                .background(Color.black.opacity(0.4).clipShape(Circle()))
-                        }
-                        Spacer()
-                    }
-                    .padding(.top, 50)
-                    .padding(.horizontal, 20)
-
-                    Spacer()
-
-                    HStack(alignment: .bottom) {
-                        // Left: Info
-                        VStack(alignment: .leading, spacing: 8) {
-                            if let v = model.currentVideo {
-                                Text(v.filename)
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                                    .lineLimit(2)
-                                    .shadow(radius: 2)
-                                
-                                Text(v.importDate, style: .date)
-                                    .font(.caption)
-                                    .foregroundColor(.white.opacity(0.8))
+                    Group {
+                        HStack {
+                            Button(action: {
+                                model.pause()
+                                if navState.selectedTab == 1 {
+                                    navState.selectedTab = 0 // Return to Home Tab
+                                } else {
+                                    dismiss()
+                                }
+                            }) {
+                                VStack(spacing: 4) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.title)
+                                        .foregroundColor(.white)
+                                        .shadow(radius: 2)
+                                    Text(" ")
+                                        .font(.caption2)
+                                        .foregroundColor(.white)
+                                        .shadow(radius: 2)
+                                }
                             }
-                        }
-                        
-                        Spacer()
-                        
-                        // Right: Actions
-                        VStack(spacing: 24) {
-                            if let v = model.currentVideo {
-                                // Like Button
-                                Button(action: {
-                                    Haptics.light()
-                                    let isShortsFav = shortsFavorites.isFavorite(videoID: v.id, startTime: model.clipStartTime)
-                                    if isShortsFav {
-                                        if let clipId = shortsFavorites.getClipId(videoID: v.id, startTime: model.clipStartTime) {
-                                            shortsFavorites.removeClip(id: clipId)
-                                        }
-                                    } else {
-                                        shortsFavorites.addClip(videoID: v.id, startTime: model.clipStartTime, endTime: model.clipStartTime + model.clipDuration)
-                                        if !favorites.isFavorite(v.id) {
-                                            favorites.toggle(v.id)
-                                        }
-                                    }
-                                }) {
-                                    VStack(spacing: 4) {
-                                        let isFav = shortsFavorites.isFavorite(videoID: v.id, startTime: model.clipStartTime)
-                                        Image(systemName: isFav ? "heart.fill" : "heart")
-                                            .font(.title)
-                                            .foregroundColor(isFav ? .pink : .white)
-                                            .shadow(radius: 2)
-                                        Text("いいね")
-                                            .font(.caption2)
-                                            .foregroundColor(.white)
-                                            .shadow(radius: 2)
-                                    }
-                                }
-                                
-                                // Jump to Full Video
-                                Button(action: {
-                                    model.pause()
-                                    jumpToFullVideo = v
-                                }) {
-                                    VStack(spacing: 4) {
-                                        Image(systemName: "play.tv.fill")
-                                            .font(.title)
-                                            .foregroundColor(.white)
-                                            .shadow(radius: 2)
-                                        Text("本編へ")
-                                            .font(.caption2)
-                                            .foregroundColor(.white)
-                                            .shadow(radius: 2)
-                                    }
-                                }
-                                
-                                // Info Button
+                            Spacer()
+                            if let _ = model.currentVideo {
                                 Button(action: {
                                     model.pause()
                                     showInfoSheet = true
@@ -597,7 +793,7 @@ struct RemoteShortsPlayerView: View {
                                             .font(.title)
                                             .foregroundColor(.white)
                                             .shadow(radius: 2)
-                                        Text("詳細")
+                                        Text(" ")
                                             .font(.caption2)
                                             .foregroundColor(.white)
                                             .shadow(radius: 2)
@@ -605,10 +801,87 @@ struct RemoteShortsPlayerView: View {
                                 }
                             }
                         }
+                        .padding(.top, 50)
+                        .padding(.horizontal, 20)
+
+                        Spacer()
+
+                        HStack(alignment: .bottom) {
+                            // Left: Info
+                            VStack(alignment: .leading, spacing: 8) {
+                                if let v = model.currentVideo {
+                                    Text(v.filename.cleanVideoTitle)
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                        .lineLimit(2)
+                                        .shadow(radius: 2)
+                                    
+                                    Text(v.importDate, style: .date)
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.8))
+                                }
+                            }
+                            
+                            Spacer()
+                            
+                            // Right: Actions
+                            VStack(spacing: 24) {
+                                if let v = model.currentVideo {
+                                    // Like Button
+                                    Button(action: {
+                                        Haptics.light()
+                                        let isShortsFav = shortsFavorites.isFavorite(videoID: v.id, startTime: model.clipStartTime)
+                                        if isShortsFav {
+                                            if let clipId = shortsFavorites.getClipId(videoID: v.id, startTime: model.clipStartTime) {
+                                                shortsFavorites.removeClip(id: clipId)
+                                            }
+                                        } else {
+                                            shortsFavorites.addClip(videoID: v.id, startTime: model.clipStartTime, endTime: model.clipStartTime + model.clipDuration)
+                                            if !favorites.isFavorite(v.id) {
+                                                favorites.toggle(v.id)
+                                            }
+                                        }
+                                    }) {
+                                        VStack(spacing: 4) {
+                                            let isFav = shortsFavorites.isFavorite(videoID: v.id, startTime: model.clipStartTime)
+                                            Image(systemName: isFav ? "heart.fill" : "heart")
+                                                .font(.title)
+                                                .foregroundColor(isFav ? .pink : .white)
+                                                .shadow(radius: 2)
+                                            Text("いいね")
+                                                .font(.caption2)
+                                                .foregroundColor(.white)
+                                                .shadow(radius: 2)
+                                        }
+                                    }
+                                    
+                                    // Jump to Full Video
+                                    Button(action: {
+                                        let startTime = model.currentPlaybackTime
+                                        model.pause()
+                                        jumpToFullVideo = FullVideoLaunchRequest(video: v, startTime: startTime)
+                                    }) {
+                                        VStack(spacing: 4) {
+                                            Image(systemName: "play.tv.fill")
+                                                .font(.title)
+                                                .foregroundColor(.white)
+                                                .shadow(radius: 2)
+                                            Text("本編へ")
+                                                .font(.caption2)
+                                                .foregroundColor(.white)
+                                                .shadow(radius: 2)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 14)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 14)
+                    .opacity(model.isPlaying ? 0 : 1)
+                    .animation(.easeInOut(duration: 0.2), value: model.isPlaying)
                     
+
 
                     // Seek Bar
                     GeometryReader { geo in
@@ -665,6 +938,10 @@ struct RemoteShortsPlayerView: View {
         .onDisappear {
             model.shutdown()
         }
+        .toolbar(model.isPlaying ? .hidden : .visible, for: .tabBar)
+        .onChange(of: model.isPlaying) { _, isPlaying in
+            onPlayStateChanged?(isPlaying)
+        }
         // Sheet for details
         .sheet(isPresented: $showInfoSheet, onDismiss: { if !model.isPlaying { model.togglePlay() } }) {
             if let v = model.currentVideo {
@@ -672,7 +949,8 @@ struct RemoteShortsPlayerView: View {
             }
         }
         // Fullscreen for jump to original
-        .fullScreenCover(item: $jumpToFullVideo, onDismiss: { if !model.isPlaying { model.togglePlay() } }) { v in
+        .fullScreenCover(item: $jumpToFullVideo, onDismiss: { if !model.isPlaying { model.togglePlay() } }) { request in
+            let v = request.video
             NavigationStack {
                 RemoteVideoListView(
                     serverName: allServerAlbums.first(where: { $0.id == v.parentAlbumID })?.name ?? "動画",
@@ -680,11 +958,12 @@ struct RemoteShortsPlayerView: View {
                     albumID: v.parentAlbumID ?? "ALL VIDEOS",
                     allServerAlbums: allServerAlbums,
                     initialVideoToPlay: v,
+                    initialStartTime: request.startTime,
                     isPresentedFromShorts: true
                 )
                 .toolbar {
                     ToolbarItem(placement: .navigationBarLeading) {
-                        Button("閉じる") {
+                        Button(" ") {
                             jumpToFullVideo = nil
                         }
                         .foregroundColor(.appGold)
@@ -692,6 +971,14 @@ struct RemoteShortsPlayerView: View {
                 }
             }
             .presentationBackground(.clear)
+        }
+        .onChange(of: videos) { _, newVideos in
+            model.updateVideos(newVideos)
+        }
+        .onChange(of: navState.shortsJumpTrigger) { _, _ in
+            if let target = navState.targetShortsVideo {
+                model.jumpToVideo(target)
+            }
         }
     }
 }
@@ -704,6 +991,8 @@ final class RemoteShortsFavoritesModel: ObservableObject {
     @Published var isLoading = false
     @Published var isPlaying = true
     @Published var progress: Double = 0.0
+    @Published var videoFocusCenter: CGPoint? = nil
+    @Published var videoSize: CGSize = .zero
 
     private var clips: [ShortsFavoriteClip] = []
     private var allVideos: [RemoteVideoInfo] = []
@@ -819,6 +1108,14 @@ final class RemoteShortsFavoritesModel: ObservableObject {
                 if self.player.currentItem != observedItem { return }
 
                 self.isLoading = false
+                self.videoSize = observedItem.presentationSize
+                Task {
+                    if let center = await VideoAnalyzer.analyzeCenter(item: observedItem) {
+                        await MainActor.run { self.videoFocusCenter = center }
+                    } else {
+                        await MainActor.run { self.videoFocusCenter = CGPoint(x: 0.5, y: 0.5) }
+                    }
+                }
                 
                 self.player.seek(to: CMTime(seconds: self.clipStartTime, preferredTimescale: 600)) { _ in
                     DispatchQueue.main.async {
@@ -884,6 +1181,7 @@ final class RemoteShortsFavoritesModel: ObservableObject {
 struct RemoteShortsFavoritesPlayerView: View {
     @StateObject private var model: RemoteShortsFavoritesModel
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var appSettings: AppSettings
     
     @ObservedObject private var favorites = FavoritesManager.shared
     @ObservedObject private var shortsFavorites = ShortsFavoritesManager.shared
@@ -891,10 +1189,12 @@ struct RemoteShortsFavoritesPlayerView: View {
     @State private var jumpToFullVideo: RemoteVideoInfo? = nil
     
     let allServerAlbums: [RemoteAlbumInfo]
+    var onPlayStateChanged: ((Bool) -> Void)?
 
-    init(videos: [RemoteVideoInfo], serverAddress: String, allServerAlbums: [RemoteAlbumInfo], initialIndex: Int = 0) {
+    init(videos: [RemoteVideoInfo], serverAddress: String, allServerAlbums: [RemoteAlbumInfo], initialIndex: Int = 0, onPlayStateChanged: ((Bool) -> Void)? = nil) {
         _model = StateObject(wrappedValue: RemoteShortsFavoritesModel(videos: videos, serverAddress: serverAddress, initialIndex: initialIndex))
         self.allServerAlbums = allServerAlbums
+        self.onPlayStateChanged = onPlayStateChanged
     }
 
     var body: some View {
@@ -916,7 +1216,7 @@ struct RemoteShortsFavoritesPlayerView: View {
                 }
             } else {
                 // Video Layer
-                PlayerLayerView(player: model.player)
+                SmartVideoPanView(player: model.player, videoSize: model.videoSize, focusCenter: model.videoFocusCenter, scaleParam: appSettings.shortsVideoFillScale)
                     .ignoresSafeArea()
                     .onTapGesture {
                         model.togglePlay()
@@ -935,68 +1235,82 @@ struct RemoteShortsFavoritesPlayerView: View {
 
                 // Overlay Controls
                 VStack {
-                    HStack {
-                        Button(action: { dismiss() }) {
-                            Image(systemName: "chevron.down")
-                                .font(.title3.weight(.bold))
-                                .foregroundColor(.white)
-                                .padding(12)
-                                .background(Color.black.opacity(0.4).clipShape(Circle()))
-                        }
-                        Spacer()
-                    }
-                    .padding(.top, 50)
-                    .padding(.horizontal, 20)
-
-                    Spacer()
-
-                    HStack(alignment: .bottom) {
-                        // Left: Info
-                        VStack(alignment: .leading, spacing: 8) {
-                            if let v = model.currentVideo {
-                                Text(v.filename)
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                                    .lineLimit(2)
-                                    .shadow(radius: 2)
+                    if !model.isPlaying {
+                        HStack {
+                            Button(action: {
+                                model.pause()
+                                dismiss()
+                            }) {
+                                VStack(spacing: 4) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.title)
+                                        .foregroundColor(.white)
+                                        .shadow(radius: 2)
+                                    Text(" ")
+                                        .font(.caption2)
+                                        .foregroundColor(.white)
+                                        .shadow(radius: 2)
+                                }
                             }
+                            Spacer()
                         }
-                        
+                        .padding(.top, 50)
+                        .padding(.horizontal, 20)
+                    }
+                    
+                    Group {
                         Spacer()
-                        
-                        // Right: Actions
-                        VStack(spacing: 24) {
-                            if let v = model.currentVideo {
-                                // Like Button
-                                Button(action: {
-                                    Haptics.light()
-                                    let isShortsFav = shortsFavorites.isFavorite(videoID: v.id, startTime: model.clipStartTime)
-                                    if isShortsFav {
-                                        if let clipId = shortsFavorites.getClipId(videoID: v.id, startTime: model.clipStartTime) {
-                                            shortsFavorites.removeClip(id: clipId)
-                                            if shortsFavorites.clips.isEmpty {
-                                                dismiss()
+
+                        HStack(alignment: .bottom) {
+                            // Left: Info
+                            VStack(alignment: .leading, spacing: 8) {
+                                if let v = model.currentVideo {
+                                    Text(v.filename.cleanVideoTitle)
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                        .lineLimit(2)
+                                        .shadow(radius: 2)
+                                }
+                            }
+                            
+                            Spacer()
+                            
+                            // Right: Actions
+                            VStack(spacing: 24) {
+                                if let v = model.currentVideo {
+                                    // Like Button
+                                    Button(action: {
+                                        Haptics.light()
+                                        let isShortsFav = shortsFavorites.isFavorite(videoID: v.id, startTime: model.clipStartTime)
+                                        if isShortsFav {
+                                            if let clipId = shortsFavorites.getClipId(videoID: v.id, startTime: model.clipStartTime) {
+                                                shortsFavorites.removeClip(id: clipId)
+                                                if shortsFavorites.clips.isEmpty {
+                                                    dismiss()
+                                                }
                                             }
                                         }
-                                    }
-                                }) {
-                                    VStack(spacing: 4) {
-                                        let isFav = shortsFavorites.isFavorite(videoID: v.id, startTime: model.clipStartTime)
-                                        Image(systemName: isFav ? "heart.fill" : "heart")
-                                            .font(.title)
-                                            .foregroundColor(isFav ? .pink : .white)
-                                            .shadow(radius: 2)
-                                        Text("いいね")
-                                            .font(.caption2)
-                                            .foregroundColor(.white)
-                                            .shadow(radius: 2)
+                                    }) {
+                                        VStack(spacing: 4) {
+                                            let isFav = shortsFavorites.isFavorite(videoID: v.id, startTime: model.clipStartTime)
+                                            Image(systemName: isFav ? "heart.fill" : "heart")
+                                                .font(.title)
+                                                .foregroundColor(isFav ? .pink : .white)
+                                                .shadow(radius: 2)
+                                            Text("いいね")
+                                                .font(.caption2)
+                                                .foregroundColor(.white)
+                                                .shadow(radius: 2)
+                                        }
                                     }
                                 }
                             }
                         }
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 14)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 14)
+                    .opacity(model.isPlaying ? 0 : 1)
+                    .animation(.easeInOut(duration: 0.2), value: model.isPlaying)
                     
                     // Seek Bar
                     GeometryReader { geo in
@@ -1047,5 +1361,9 @@ struct RemoteShortsFavoritesPlayerView: View {
         )
         .onAppear { model.start() }
         .onDisappear { model.shutdown() }
+        .toolbar(model.isPlaying ? .hidden : .visible, for: .tabBar)
+        .onChange(of: model.isPlaying) { _, isPlaying in
+            onPlayStateChanged?(isPlaying)
+        }
     }
 }

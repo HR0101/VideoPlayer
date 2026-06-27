@@ -3,12 +3,10 @@ import SwiftUI
 struct MainTabView: View {
     @EnvironmentObject var serverManager: ServerManager
     @EnvironmentObject var serverBrowser: ServerBrowser
-    
-    // Tab Selection State
-    @State private var selectedTab = 0
+    @EnvironmentObject var navState: AppNavigationState
     
     var body: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: $navState.selectedTab) {
             // 1. ホームタブ (YouTube風 おすすめ動画)
             HomeTabView()
                 .tabItem {
@@ -32,6 +30,14 @@ struct MainTabView: View {
                     Text("アルバム")
                 }
                 .tag(2)
+                
+            // 4. 設定タブ
+            SettingsView()
+                .tabItem {
+                    Image(systemName: "gearshape.fill")
+                    Text("設定")
+                }
+                .tag(3)
         }
         .tint(Color.appGold)
         .onAppear {
@@ -66,6 +72,7 @@ struct HomeTabView: View {
 // MARK: - ショートタブ
 struct ShortsTabView: View {
     @EnvironmentObject var serverManager: ServerManager
+    @EnvironmentObject var navState: AppNavigationState
     
     var body: some View {
         if let server = serverManager.server, let address = server.address {
@@ -74,8 +81,14 @@ struct ShortsTabView: View {
                     serverName: "ショート",
                     serverAddress: address,
                     albumID: "SHORTS",
-                    allServerAlbums: serverManager.albums
+                    allServerAlbums: serverManager.albums,
+                    initialVideoToPlay: navState.targetShortsVideo
                 )
+            }
+            .onChange(of: navState.targetShortsVideo) { _, _ in
+                // Target shorts video changed, RemoteVideoListView will handle if we pass it, but wait:
+                // If it's already rendered, RemoteVideoListView's task won't rerun unless id changes.
+                // We can use .id to force recreation if needed, but it might reset the whole list.
             }
         } else {
             ServerConnectingView(title: "ショート")

@@ -15,6 +15,7 @@ final class PlayerManager: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var timeObserverToken: Any?
     private var endObserver: NSObjectProtocol?
+    private var lastFastSeekTime = Date.distantPast
 
     init(videoURL: URL, startAt: Double = 0) {
         addPeriodicObserver()
@@ -117,8 +118,19 @@ final class PlayerManager: ObservableObject {
     }
 
     func seek(toSeconds seconds: Double) {
-        let target = CMTime(seconds: seconds, preferredTimescale: 600)
+        let safeSeconds = duration > 0.2 ? min(seconds, duration - 0.1) : seconds
+        let target = CMTime(seconds: max(0, safeSeconds), preferredTimescale: 600)
         player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    func fastSeek(toSeconds seconds: Double) {
+        let now = Date()
+        guard now.timeIntervalSince(lastFastSeekTime) > 0.15 else { return }
+        lastFastSeekTime = now
+        
+        let safeSeconds = duration > 0.2 ? min(seconds, duration - 0.1) : seconds
+        let target = CMTime(seconds: max(0, safeSeconds), preferredTimescale: 600)
+        player.seek(to: target, toleranceBefore: .positiveInfinity, toleranceAfter: .positiveInfinity)
     }
 
     func restart() {

@@ -1,5 +1,6 @@
 import SwiftUI
 import MediaServerKit
+import AVFoundation
 
 class AppNavigationState: ObservableObject {
     @Published var selectedTab: Int = 0
@@ -14,6 +15,17 @@ struct VideoPlayerApp: App {
     @StateObject private var serverManager = ServerManager()
     @StateObject private var downloadManager = DownloadManager()
     @StateObject private var navState = AppNavigationState()
+
+    init() {
+        // 動画アプリとして、端末のサイレント（消音）スイッチに関係なく音声を再生する。
+        // これを設定しないと既定が .soloAmbient になり、消音モード時にアプリ全体で音が出なくなる。
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("AVAudioSession の設定に失敗: \(error)")
+        }
+    }
 
     var body: some Scene {
         WindowGroup {

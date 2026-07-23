@@ -2,20 +2,20 @@ import SwiftUI
 import UIKit
 
 // MARK: - アプリ全体のデザインシステム
-// 「ダーク × ゴールド」のプレミアム・シアタールック。
+// macOS版の造形を受け継いだ「ダーク・ネオモーフィズム」。
 // 色・角丸・グラデーション・カードスタイル・アニメーションをここに集約する。
 
 // MARK: - カラーパレット
 extension Color {
-    // 基調のダーク（わずかに青みを帯びた黒）
-    static let appDarkBackground = Color(red: 0.04, green: 0.04, blue: 0.07)
-    static let appDarkSurface    = Color(red: 0.10, green: 0.10, blue: 0.15)
-    static let appDarkElevated   = Color(red: 0.15, green: 0.15, blue: 0.21)
+    // 暗い青灰色を基調にし，面と背景の差を影で表現する
+    static let appDarkBackground = Color(red: 0.075, green: 0.09, blue: 0.11)
+    static let appDarkSurface    = Color(red: 0.095, green: 0.115, blue: 0.14)
+    static let appDarkElevated   = Color(red: 0.125, green: 0.15, blue: 0.18)
 
-    // シャンパンゴールド 3 階調
-    static let appGold      = Color(red: 0.87, green: 0.74, blue: 0.46)
-    static let appGoldLight = Color(red: 0.97, green: 0.89, blue: 0.66)
-    static let appGoldDeep  = Color(red: 0.68, green: 0.53, blue: 0.28)
+    // 既存画面との互換性のため名称を維持し，macOS版に近いシアンへ統一する
+    static let appGold      = Color(red: 0.18, green: 0.72, blue: 0.78)
+    static let appGoldLight = Color(red: 0.40, green: 0.88, blue: 0.91)
+    static let appGoldDeep  = Color(red: 0.08, green: 0.45, blue: 0.52)
 
     // テキスト階層
     static let appTextSecondary = Color.white.opacity(0.65)
@@ -27,8 +27,10 @@ enum AppTheme {
     static let radiusS: CGFloat = 10
     static let radiusM: CGFloat = 16
     static let radiusL: CGFloat = 22
+    static let lightShadow = Color(red: 0.18, green: 0.22, blue: 0.27)
+    static let darkShadow = Color.black.opacity(0.72)
 
-    /// メタリックな金のグラデーション（ボタン・バッジ用）
+    /// シアンのアクセントグラデーション（ボタン・バッジ用）
     static let goldGradient = LinearGradient(
         colors: [.appGoldLight, .appGold, .appGoldDeep],
         startPoint: .topLeading,
@@ -37,7 +39,7 @@ enum AppTheme {
 
     /// カード縁取り用の繊細なストローク
     static let cardStroke = LinearGradient(
-        colors: [.white.opacity(0.18), .white.opacity(0.03)],
+        colors: [.white.opacity(0.12), .black.opacity(0.28)],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
     )
@@ -62,21 +64,21 @@ enum AppTheme {
 }
 
 // MARK: - 画面共通の背景
-/// 深い闇に、左上から金のグロー・右下から青のグローをほのかに灯す
+/// 青みのある暗い面に，アクセントの光を控えめに重ねる
 struct AppBackground: View {
     var body: some View {
         ZStack {
             Color.appDarkBackground
 
             RadialGradient(
-                colors: [Color.appGold.opacity(0.13), .clear],
+                colors: [Color.appGold.opacity(0.11), .clear],
                 center: .topLeading,
                 startRadius: 0,
                 endRadius: 420
             )
 
             RadialGradient(
-                colors: [Color(red: 0.25, green: 0.30, blue: 0.55).opacity(0.18), .clear],
+                colors: [Color(red: 0.10, green: 0.28, blue: 0.34).opacity(0.20), .clear],
                 center: .bottomTrailing,
                 startRadius: 0,
                 endRadius: 520
@@ -86,24 +88,25 @@ struct AppBackground: View {
     }
 }
 
-// MARK: - ガラスカード
+// MARK: - ネオモーフィズムカード
 private struct GlassCardModifier: ViewModifier {
     var cornerRadius: CGFloat
 
     func body(content: Content) -> some View {
         content
-            .background(.ultraThinMaterial)
+            .background(Color.appDarkSurface)
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(AppTheme.cardStroke, lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.35), radius: 12, x: 0, y: 6)
+            .shadow(color: AppTheme.lightShadow.opacity(0.72), radius: 8, x: -6, y: -6)
+            .shadow(color: AppTheme.darkShadow, radius: 10, x: 7, y: 7)
     }
 }
 
 extension View {
-    /// すりガラス + 繊細な縁取り + 浮遊感のある影
+    /// 明暗2方向の影で背景から押し出された面を表現する
     func glassCard(cornerRadius: CGFloat = AppTheme.radiusL) -> some View {
         modifier(GlassCardModifier(cornerRadius: cornerRadius))
     }
@@ -174,7 +177,7 @@ struct SkeletonCard: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(Color.white.opacity(0.06))
+            .fill(Color.appDarkElevated)
             .shimmer()
     }
 }
@@ -189,11 +192,12 @@ struct SectionHeaderView: View {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.footnote.weight(.bold))
-                .foregroundStyle(Color.appDarkBackground)
+                .foregroundStyle(Color.appGoldLight)
                 .frame(width: 26, height: 26)
-                .background(AppTheme.goldGradient)
+                .background(Color.appDarkSurface)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .shadow(color: Color.appGold.opacity(0.35), radius: 6, x: 0, y: 2)
+                .shadow(color: AppTheme.lightShadow.opacity(0.65), radius: 4, x: -3, y: -3)
+                .shadow(color: AppTheme.darkShadow, radius: 5, x: 4, y: 4)
 
             Text(title)
                 .font(.title3.weight(.bold))

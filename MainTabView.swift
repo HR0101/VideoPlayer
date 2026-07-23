@@ -40,6 +40,7 @@ struct MainTabView: View {
                 .tag(3)
         }
         .tint(Color.appGold)
+        .preferredColorScheme(.dark)
         .onAppear {
             serverBrowser.startBrowsing()
         }
@@ -99,7 +100,9 @@ struct ShortsTabView: View {
 // MARK: - サーバー接続中のローディング画面
 struct ServerConnectingView: View {
     let title: String
+    @EnvironmentObject var serverBrowser: ServerBrowser
     @State private var showNotFound = false
+    @State private var searchAttempt = 0
 
     var body: some View {
         NavigationStack {
@@ -113,9 +116,28 @@ struct ServerConnectingView: View {
                         Text("サーバーに接続されていません")
                             .font(.headline)
                             .foregroundStyle(.white)
-                        Text("「アルバム」タブからサーバーに接続してください")
+                        Text("MacでAllServerForMacを起動し、\n同じWi-Fiに接続してください")
                             .font(.subheadline)
                             .foregroundStyle(.gray)
+                            .multilineTextAlignment(.center)
+
+                        Button {
+                            Haptics.light()
+                            serverBrowser.stopBrowsing()
+                            serverBrowser.startBrowsing()
+                            withAnimation { showNotFound = false }
+                            searchAttempt += 1
+                            scheduleNotFoundFallback()
+                        } label: {
+                            Label("もう一度探す", systemImage: "arrow.clockwise")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(Color.appDarkBackground)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 12)
+                                .background(AppTheme.goldGradient)
+                                .clipShape(Capsule())
+                        }
+                        .padding(.top, 8)
                     }
                 } else {
                     VStack(spacing: 24) {
@@ -138,9 +160,17 @@ struct ServerConnectingView: View {
             .toolbarBackground(.visible, for: .navigationBar)
         }
         .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                withAnimation { showNotFound = true }
-            }
+            scheduleNotFoundFallback()
+        }
+    }
+
+    /// 一定時間サーバーが見つからなければ「未接続」表示に切り替える。
+    /// 再検索ボタンで探索し直した場合は古いタイマーを無効化する。
+    private func scheduleNotFoundFallback() {
+        let attempt = searchAttempt
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+            guard attempt == searchAttempt else { return }
+            withAnimation { showNotFound = true }
         }
     }
 }

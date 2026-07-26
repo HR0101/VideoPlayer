@@ -3,9 +3,29 @@ import Foundation
 
 class AppSettings: ObservableObject {
     private static let thumbnailOptionKey = "thumbnailOption"
+    private static let photoTapNavigationModeKey = "photoTapNavigationMode"
+    private static let legacyMangaModeKey = "isMangaMode"
+    private static let remoteVideoAlbumSortOrderKey = "remoteVideoAlbumSortOrder"
+    private static let remotePhotoAlbumSortOrderKey = "remotePhotoAlbumSortOrder"
 
     @Published var thumbnailOption: ThumbnailOption {
         didSet { UserDefaults.standard.set(thumbnailOption.rawValue, forKey: Self.thumbnailOptionKey) }
+    }
+
+    @Published var remoteVideoAlbumSortOrder: RemoteSortOrder {
+        didSet { UserDefaults.standard.set(remoteVideoAlbumSortOrder.rawValue, forKey: Self.remoteVideoAlbumSortOrderKey) }
+    }
+
+    @Published var remotePhotoAlbumSortOrder: RemoteSortOrder {
+        didSet { UserDefaults.standard.set(remotePhotoAlbumSortOrder.rawValue, forKey: Self.remotePhotoAlbumSortOrderKey) }
+    }
+
+    // 0 = 右タップで次へ, 1 = 左タップで次へ
+    @Published var photoTapNavigationMode: Int {
+        didSet {
+            UserDefaults.standard.set(photoTapNavigationMode, forKey: Self.photoTapNavigationModeKey)
+            UserDefaults.standard.set(photoTapNavigationMode == 1, forKey: Self.legacyMangaModeKey)
+        }
     }
     
     private static let upNextDisplayStyleKey = "upNextDisplayStyle"
@@ -32,6 +52,14 @@ class AppSettings: ObservableObject {
     init() {
         let savedThumbnailValue = UserDefaults.standard.integer(forKey: Self.thumbnailOptionKey)
         self.thumbnailOption = ThumbnailOption(rawValue: savedThumbnailValue) ?? .initial
+        self.remoteVideoAlbumSortOrder = Self.loadRemoteSortOrder(forKey: Self.remoteVideoAlbumSortOrderKey)
+        self.remotePhotoAlbumSortOrder = Self.loadRemoteSortOrder(forKey: Self.remotePhotoAlbumSortOrderKey)
+
+        if UserDefaults.standard.object(forKey: Self.photoTapNavigationModeKey) != nil {
+            self.photoTapNavigationMode = UserDefaults.standard.integer(forKey: Self.photoTapNavigationModeKey)
+        } else {
+            self.photoTapNavigationMode = UserDefaults.standard.bool(forKey: Self.legacyMangaModeKey) ? 1 : 0
+        }
         
         // 既存のキーがなければデフォルト値(0=自動)になる
         self.upNextDisplayStyle = UserDefaults.standard.integer(forKey: Self.upNextDisplayStyleKey)
@@ -70,5 +98,13 @@ class AppSettings: ObservableObject {
         } else {
             self.excludedTitleWords = []
         }
+    }
+
+    private static func loadRemoteSortOrder(forKey key: String) -> RemoteSortOrder {
+        if let rawValue = UserDefaults.standard.string(forKey: key),
+           let order = RemoteSortOrder(rawValue: rawValue) {
+            return order
+        }
+        return .importDescending
     }
 }

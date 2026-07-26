@@ -220,9 +220,36 @@ class ServerAPI {
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
 
+    static func deleteVideosCompletely(serverAddress: String, videoIDs: [String]) async throws -> Bool {
+        guard let url = URL(string: "\(serverAddress)/deleteVideosCompletely") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let pin = ServerAuth.pin(for: serverAddress) { request.setValue(pin, forHTTPHeaderField: "X-Auth-PIN") }
+
+        struct DelReq: Codable { let videoIds: [String] }
+        let body = DelReq(videoIds: videoIDs)
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        return (response as? HTTPURLResponse)?.statusCode == 200
+    }
+
     // URLSessionUploadTaskを使用してメモリを節約
     static func uploadMedia(serverAddress: String, fileURL: URL, albumID: String) async throws -> Bool {
         guard let url = URL(string: "\(serverAddress)/upload") else { return false }
+
+        // サーバー（Swifter）はボディを全てメモリへ展開してから処理するため、
+        // 上限超過のファイルを送りつけるとサーバー側でメモリ枯渇の危険がある。
+        // 上限は /server/status で公開されているので、送信前にこちらで弾く。
+        if let limit = await fetchMaxUploadBytes(serverAddress: serverAddress), limit > 0 {
+            let fileSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            if fileSize > limit {
+                print("⚠️ [UPLOAD] \(fileURL.lastPathComponent) はサーバーの上限（\(limit) bytes）を超えているため送信しません")
+                return false
+            }
+        }
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
@@ -234,6 +261,15 @@ class ServerAPI {
 
         let (_, response) = try await URLSession.shared.upload(for: request, fromFile: fileURL)
         return (response as? HTTPURLResponse)?.statusCode == 200
+    }
+
+    /// サーバーが受け付けるアップロード上限（バイト）。取得できなければ nil（チェックはスキップ）。
+    private static func fetchMaxUploadBytes(serverAddress: String) async -> Int? {
+        struct StatusData: Codable { let maxUploadBytes: Int? }
+        guard let url = URL(string: "\(serverAddress)/server/status") else { return nil }
+        guard let (data, _) = try? await URLSession.shared.data(for: ServerAuth.request(url, address: serverAddress)),
+              let status = try? JSONDecoder().decode(StatusData.self, from: data) else { return nil }
+        return status.maxUploadBytes
     }
 }
 
@@ -348,6 +384,10 @@ class ServerManager: ObservableObject {
                 self.authRequired = true
                 self.albums = []
                 self.isLoading = false
+                // サムネイルには Cache-Control（1時間）が付いているため、認証が無効になっても
+                // キャッシュ済み画像は表示され続けてしまう。認証切れを検知したこのタイミングで
+                // HTTPキャッシュを破棄し、「締め出されたのに画像だけ見える」状態を防ぐ。
+                URLCache.shared.removeAllCachedResponses()
                 return
             }
             self.authRequired = false

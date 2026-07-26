@@ -192,11 +192,17 @@ struct AlbumListView: View {
                 } else if serverManager.isLoading {
                     loadingSkeleton(width: width)
                 } else if let errorMessage = serverManager.errorMessage {
-                    statusCard(icon: "exclamationmark.triangle.fill", title: "接続エラー", message: errorMessage)
+                    statusCard(icon: "exclamationmark.triangle.fill", title: "接続エラー", message: errorMessage) {
+                        Haptics.light()
+                        Task { await serverManager.fetchAlbums(serverAddress: address) }
+                    }
                 } else {
                     let libraryAlbums = serverManager.albums.filter { $0.name == "ALL VIDEOS" || $0.name == "ALL PHOTOS" }
                     let videoAlbums = serverManager.albums.filter { ($0.type == "video" || $0.type == nil) && $0.name != "ALL VIDEOS" && $0.name != "ALL PHOTOS" }
                     let photoAlbums = serverManager.albums.filter { $0.type == "photo" && $0.name != "ALL VIDEOS" && $0.name != "ALL PHOTOS" }
+                    // 動画アルバムも「/」区切りの名前から階層ツリーを組む（写真と同じ扱い）。
+                    let videoAlbumNodes = buildRemoteAlbumTree(from: videoAlbums)
+                    let photoAlbumNodes = buildRemoteAlbumTree(from: photoAlbums)
 
                     if isListViewMode {
                         LazyVStack(spacing: 12) {
@@ -207,11 +213,11 @@ struct AlbumListView: View {
                                 let isPhoto = album.name == "ALL PHOTOS"
                                 serverListRow(album: album, address: address, icon: isPhoto ? "photo.on.rectangle.fill" : "film.stack.fill")
                             }
-                            ForEach(videoAlbums) { album in
-                                serverListRow(album: album, address: address, icon: "folder.fill")
+                            ForEach(videoAlbumNodes) { node in
+                                serverListNodeRow(node: node, address: address, leafIcon: "film.stack.fill", folderColor: .cyan)
                             }
-                            ForEach(photoAlbums) { album in
-                                serverListRow(album: album, address: address, icon: "photo.on.rectangle.fill")
+                            ForEach(photoAlbumNodes) { node in
+                                serverListNodeRow(node: node, address: address, leafIcon: "photo.on.rectangle.fill", folderColor: .orange)
                             }
                         }
                     } else {
@@ -223,11 +229,11 @@ struct AlbumListView: View {
                                 let isPhoto = album.name == "ALL PHOTOS"
                                 serverGridCell(album: album, address: address, icon: isPhoto ? "photo.on.rectangle.fill" : "film.stack.fill")
                             }
-                            ForEach(videoAlbums) { album in
-                                serverGridCell(album: album, address: address, icon: "folder.fill")
+                            ForEach(videoAlbumNodes) { node in
+                                serverGridNodeCell(node: node, address: address, leafIcon: "film.stack.fill", folderColor: .cyan)
                             }
-                            ForEach(photoAlbums) { album in
-                                serverGridCell(album: album, address: address, icon: "photo.on.rectangle.fill")
+                            ForEach(photoAlbumNodes) { node in
+                                serverGridNodeCell(node: node, address: address, leafIcon: "photo.on.rectangle.fill", folderColor: .orange)
                             }
                         }
                     }
@@ -296,7 +302,7 @@ struct AlbumListView: View {
     }
 
     // MARK: - 状態表示カード
-    private func statusCard(icon: String, title: String, message: String) -> some View {
+    private func statusCard(icon: String, title: String, message: String, onRetry: (() -> Void)? = nil) -> some View {
         VStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.title2)
@@ -308,6 +314,20 @@ struct AlbumListView: View {
                 .font(.caption)
                 .foregroundStyle(Color.appTextSecondary)
                 .multilineTextAlignment(.center)
+
+            if let onRetry {
+                Button(action: onRetry) {
+                    Label("再試行", systemImage: "arrow.clockwise")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(Color.appDarkBackground)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 10)
+                        .background(AppTheme.goldGradient)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(PressableCardStyle())
+                .padding(.top, 6)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(24)
@@ -403,16 +423,16 @@ struct AlbumListView: View {
     }
 
     // MARK: - サーバー用コンポーネント
-    private func serverListRow(album: RemoteAlbumInfo, address: String, icon: String) -> some View {
+    private func serverListRow(album: RemoteAlbumInfo, address: String, icon: String, displayName: String? = nil) -> some View {
         NavigationLink(destination: RemoteVideoListView(serverName: album.name, serverAddress: address, albumID: album.id, allServerAlbums: serverManager.albums)) {
             HStack(spacing: 16) {
-                ServerAlbumCoverView(serverAddress: address, albumID: album.id, icon: icon, color: .appGold)
+                ServerAlbumCoverView(serverAddress: address, coverVideoID: album.coverVideoID, icon: icon, color: .appGold)
                     .frame(width: 64, height: 64)
                     .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusS, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: AppTheme.radiusS, style: .continuous).strokeBorder(AppTheme.cardStroke, lineWidth: 0.5))
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(album.name)
+                    Text(displayName ?? album.name)
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(.white)
                     Text("\(album.videoCount) 項目")
@@ -437,14 +457,14 @@ struct AlbumListView: View {
         }
     }
 
-    private func serverGridCell(album: RemoteAlbumInfo, address: String, icon: String) -> some View {
+    private func serverGridCell(album: RemoteAlbumInfo, address: String, icon: String, displayName: String? = nil) -> some View {
         NavigationLink(destination: RemoteVideoListView(serverName: album.name, serverAddress: address, albumID: album.id, allServerAlbums: serverManager.albums)) {
-            ServerAlbumCoverView(serverAddress: address, albumID: album.id, icon: icon, color: .appGold)
+            ServerAlbumCoverView(serverAddress: address, coverVideoID: album.coverVideoID, icon: icon, color: .appGold)
                 .aspectRatio(1, contentMode: .fill)
                 .frame(minWidth: 0, maxWidth: .infinity)
                 .overlay(AppTheme.bottomScrim)
                 .overlay(alignment: .bottomLeading) {
-                    Text(album.name)
+                    Text(displayName ?? album.name)
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(.white)
                         .lineLimit(1)
@@ -466,6 +486,149 @@ struct AlbumListView: View {
                 } label: { Label("削除", systemImage: "trash") }
             }
         }
+    }
+
+    @ViewBuilder
+    private func serverListNodeRow(node: AlbumNode, address: String, leafIcon: String, folderColor: Color) -> some View {
+        if let children = node.children, !children.isEmpty {
+            serverFolderListRow(node: node, children: children, address: address, leafIcon: leafIcon, folderColor: folderColor)
+        } else if let album = node.album {
+            serverListRow(album: album, address: address, icon: leafIcon, displayName: node.name)
+        }
+    }
+
+    @ViewBuilder
+    private func serverGridNodeCell(node: AlbumNode, address: String, leafIcon: String, folderColor: Color) -> some View {
+        if let children = node.children, !children.isEmpty {
+            serverFolderGridCell(node: node, children: children, address: address, leafIcon: leafIcon, folderColor: folderColor)
+        } else if let album = node.album {
+            serverGridCell(album: album, address: address, icon: leafIcon, displayName: node.name)
+        }
+    }
+
+    private func serverFolderListRow(node: AlbumNode, children: [AlbumNode], address: String, leafIcon: String, folderColor: Color) -> some View {
+        NavigationLink(destination: RemoteAlbumFolderView(title: node.name, serverAddress: address, parentAlbum: node.album, nodes: children, allAlbums: serverManager.albums, icon: leafIcon, color: folderColor)) {
+            HStack(spacing: 16) {
+                ServerFolderCoverView(serverAddress: address, coverVideoID: node.coverVideoID, color: folderColor)
+                    .frame(width: 64, height: 64)
+                    .overlay(alignment: .topLeading) {
+                        FolderBadge()
+                            .padding(4)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusS, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: AppTheme.radiusS, style: .continuous).strokeBorder(AppTheme.cardStroke, lineWidth: 0.5))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(node.name)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.white)
+                    Text("\(node.totalVideoCount) 項目")
+                        .font(.caption.weight(.medium).monospacedDigit())
+                        .foregroundStyle(Color.appGold.opacity(0.85))
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.appTextTertiary)
+            }
+            .padding(12)
+            .glassCard(cornerRadius: AppTheme.radiusM)
+        }
+        .buttonStyle(PressableCardStyle(scale: 0.98))
+    }
+
+    private func serverFolderGridCell(node: AlbumNode, children: [AlbumNode], address: String, leafIcon: String, folderColor: Color) -> some View {
+        NavigationLink(destination: RemoteAlbumFolderView(title: node.name, serverAddress: address, parentAlbum: node.album, nodes: children, allAlbums: serverManager.albums, icon: leafIcon, color: folderColor)) {
+            ServerFolderCoverView(serverAddress: address, coverVideoID: node.coverVideoID, color: folderColor)
+            .aspectRatio(1, contentMode: .fill)
+            .frame(minWidth: 0, maxWidth: .infinity)
+            .overlay(AppTheme.bottomScrim)
+            .overlay(alignment: .bottomLeading) {
+                Text(node.name)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .padding(12)
+            }
+            .overlay(alignment: .topLeading) {
+                FolderBadge()
+                    .padding(10)
+            }
+            .overlay(alignment: .topTrailing) {
+                CountBadge(count: node.totalVideoCount)
+                    .padding(10)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous).strokeBorder(AppTheme.cardStroke, lineWidth: 1))
+            .shadow(color: .black.opacity(0.35), radius: 10, x: 0, y: 5)
+        }
+        .buttonStyle(PressableCardStyle())
+    }
+
+    private func buildRemoteAlbumTree(from albums: [RemoteAlbumInfo]) -> [AlbumNode] {
+        final class NodeBuilder {
+            let id: String
+            let name: String
+            var album: RemoteAlbumInfo?
+            var children: [String: NodeBuilder] = [:]
+
+            init(id: String, name: String) {
+                self.id = id
+                self.name = name
+            }
+
+            func makeNode() -> AlbumNode {
+                AlbumNode(
+                    id: id,
+                    name: name,
+                    album: album,
+                    children: children.isEmpty ? nil : children.values
+                        .map { $0.makeNode() }
+                        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+                )
+            }
+        }
+
+        let root = NodeBuilder(id: "root", name: "root")
+
+        for album in albums {
+            let parts = album.name
+                .components(separatedBy: "/")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            guard !parts.isEmpty else { continue }
+
+            var current = root
+            var currentPath = ""
+
+            for (index, part) in parts.enumerated() {
+                currentPath += (currentPath.isEmpty ? "" : "/") + part
+                if current.children[part] == nil {
+                    current.children[part] = NodeBuilder(id: currentPath, name: part)
+                }
+                current = current.children[part]!
+
+                if index == parts.count - 1 {
+                    current.album = album
+                }
+            }
+        }
+
+        // メディアが1件も無いノード（空アルバム／中身が全部空のフォルダ）は落とす。
+        // Mac サーバー側と同じく「空アルバムは表示しない」をスマホUIにも反映する。
+        func removingEmpty(_ node: AlbumNode) -> AlbumNode? {
+            let keptChildren = (node.children ?? []).compactMap { removingEmpty($0) }
+            let ownCount = node.album?.videoCount ?? 0
+            if ownCount == 0 && keptChildren.isEmpty { return nil }
+            var copy = node
+            copy.children = keptChildren.isEmpty ? nil : keptChildren
+            return copy
+        }
+
+        return root.children.values
+            .map { $0.makeNode() }
+            .compactMap { removingEmpty($0) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     // MARK: - 仮想アルバム (お気に入り・再生履歴)
@@ -647,12 +810,12 @@ struct LocalAlbumCoverView: View {
 
 struct ServerAlbumCoverView: View {
     let serverAddress: String
-    let albumID: String
+    /// `/albums` 応答に含まれる表紙用の動画ID。以前はここで全動画リストJSONを
+    /// 取得して先頭IDだけ使っていたが、サーバーが返す値をそのまま使うことで
+    /// アルバム画面表示時のMB級の通信を丸ごと省く。
+    let coverVideoID: String?
     let icon: String
     let color: Color
-
-    @State private var coverVideoID: String?
-    @State private var hasFetched = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -677,12 +840,6 @@ struct ServerAlbumCoverView: View {
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
-        .task {
-            if !hasFetched {
-                hasFetched = true
-                await fetchCoverID()
-            }
-        }
     }
 
     private func fallbackIcon(size: CGFloat) -> some View {
@@ -690,21 +847,56 @@ struct ServerAlbumCoverView: View {
             .font(.system(size: size, weight: .light))
             .foregroundStyle(color.opacity(0.5))
     }
+}
 
-    private func fetchCoverID() async {
-        guard let url = URL(string: "\(serverAddress)/albums/\(albumID)/videos") else { return }
-        do {
-            let (data, _) = try await URLSession.shared.data(for: ServerAuth.request(url, address: serverAddress))
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            let videos = try decoder.decode([RemoteVideoInfo].self, from: data)
-            if let first = videos.first {
-                await MainActor.run {
-                    coverVideoID = first.id
+/// フォルダ（子アルバムを持つノード）の表紙。既知の coverVideoID があれば
+/// そのサムネイルを直接表示し、無ければ従来のフォルダアイコンにフォールバックする。
+struct ServerFolderCoverView: View {
+    let serverAddress: String
+    let coverVideoID: String?
+    let color: Color
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                if let vid = coverVideoID {
+                    Color.appDarkSurface
+                    AsyncImage(url: ServerAuth.mediaURL(address: serverAddress, path: "/thumbnail/\(vid)")) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image.resizable().aspectRatio(contentMode: .fill)
+                                .transition(.opacity)
+                        case .failure:
+                            folderPlaceholder(size: proxy.size.width * 0.34)
+                        default:
+                            SkeletonCard(cornerRadius: 0)
+                        }
+                    }
+                } else {
+                    folderPlaceholder(size: proxy.size.width * 0.34)
                 }
             }
-        } catch {
-            print("Failed to fetch cover for album: \(albumID)")
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
+    }
+
+    private func folderPlaceholder(size: CGFloat) -> some View {
+        ZStack {
+            LinearGradient(colors: [color.opacity(0.35), Color.appDarkSurface], startPoint: .topLeading, endPoint: .bottomTrailing)
+            Image(systemName: "folder.fill")
+                .font(.system(size: size, weight: .light))
+                .foregroundStyle(color)
+        }
+    }
+}
+
+/// フォルダ（子アルバムを持つ）であることを示す小さな印。表紙の左上に重ねる。
+struct FolderBadge: View {
+    var body: some View {
+        Image(systemName: "folder.fill")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(6)
+            .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 }

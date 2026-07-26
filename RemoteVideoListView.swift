@@ -36,6 +36,7 @@ struct RemoteVideoListView: View {
     var isPresentedFromShorts: Bool = false
     
     @EnvironmentObject var navState: AppNavigationState
+    @EnvironmentObject var appSettings: AppSettings
     
     @StateObject private var viewModel = RemoteVideoListViewModel()
     @State private var showEmptyMessage = false
@@ -83,6 +84,8 @@ struct RemoteVideoListView: View {
     @State private var isUploading = false
     @State private var itemsPendingDeletion: [PickedMediaItem] = []
     @State private var showDeletePrompt = false
+    @State private var showDeleteConfirmation = false
+    @State private var targetVideoIDsToDelete: [String] = []
     
     @State private var showAlbumNav = false
     @State private var selectedAlbumIDForNav: String?
@@ -96,6 +99,9 @@ struct RemoteVideoListView: View {
     private let accentGlowColor  = Color.appGold
 
     private var columns: [GridItem] { Array(repeating: GridItem(.flexible(), spacing: 8), count: gridColumnCount) }
+    private var currentSortOrder: RemoteSortOrder {
+        isPhotoSortContext ? appSettings.remotePhotoAlbumSortOrder : appSettings.remoteVideoAlbumSortOrder
+    }
 
     private var emptyMessage: String {
         switch albumID {
@@ -106,7 +112,9 @@ struct RemoteVideoListView: View {
     }
 
     private var videos: [RemoteVideoInfo] { viewModel.videos }
-    private var sortedAndFilteredVideos: [RemoteVideoInfo] { viewModel.sortedAndFilteredVideos(for: albumID) }
+    private var sortedAndFilteredVideos: [RemoteVideoInfo] {
+        viewModel.sortedAndFilteredVideos(for: albumID, sortOrder: currentSortOrder)
+    }
 
     var body: some View {
         ZStack {
@@ -145,7 +153,40 @@ struct RemoteVideoListView: View {
                 }
                 
                 if let error = viewModel.errorMessage, !isVirtualAlbum {
-                    VStack { Spacer(); Text(error).foregroundColor(.white).padding().background(Color.red.opacity(0.8)).cornerRadius(10).padding() }
+                    VStack {
+                        Spacer()
+                        HStack(spacing: 12) {
+                            Text(error)
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                                .lineLimit(3)
+                            Spacer(minLength: 0)
+                            Button {
+                                Haptics.light()
+                                Task { await fetchVideosFromServer() }
+                            } label: {
+                                Text("再試行")
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(Color.white.opacity(0.25))
+                                    .clipShape(Capsule())
+                            }
+                            Button {
+                                viewModel.errorMessage = nil
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.title3)
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
+                            .accessibilityLabel("エラーを閉じる")
+                        }
+                        .padding()
+                        .background(Color.red.opacity(0.85))
+                        .cornerRadius(12)
+                        .padding()
+                    }
                 }
                 
                 if isUploading {
@@ -245,28 +286,35 @@ struct RemoteVideoListView: View {
                         Button(action: { showUploadSourceMenu = true }) {
                             Image(systemName: "icloud.and.arrow.up").foregroundColor(accentGlowColor)
                         }
+                        .accessibilityLabel("メディアを追加")
                         .confirmationDialog("メディアを追加", isPresented: $showUploadSourceMenu, titleVisibility: .visible) {
                             Button("写真アプリから選ぶ") { showPhotoPicker = true }
                             Button("ファイルアプリから選ぶ") { showDocumentPicker = true }
                             Button("キャンセル", role: .cancel) {}
                         }
                     }
-                    
+
                     if albumID != "HOME" {
                         Button(action: { withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { isListViewMode.toggle() } }) {
                             Image(systemName: isListViewMode ? "square.grid.2x2" : "list.bullet")
                                 .foregroundColor(accentGlowColor)
                         }
+                        .accessibilityLabel(isListViewMode ? "グリッド表示に切り替え" : "リスト表示に切り替え")
                     }
-                    
+
                     Button(action: { withAnimation { isSelectionMode = true } }) { Text("選択").foregroundColor(accentGlowColor) }.disabled(videos.isEmpty)
-                    
+
                     if !isVirtualAlbum {
                         Menu {
-                            Picker("並び替え", selection: $viewModel.currentSortOrder) { ForEach(RemoteSortOrder.allCases, id: \.self) { order in Text(order.rawValue).tag(order) } }
+                            Picker("並び替え", selection: sortOrderBinding) {
+                                ForEach(RemoteSortOrder.allCases) { order in
+                                    Text(order.rawValue).tag(order)
+                                }
+                            }
                         } label: { Image(systemName: "arrow.up.arrow.down.circle").foregroundColor(accentGlowColor) }
+                            .accessibilityLabel("並び替え")
                     }
-                    
+
                     if albumID != "SHORTS" && albumID != "HOME" {
                         Button(action: {
                             if let video = sortedAndFilteredVideos.filter({ isShortVideo($0) }).randomElement() {
@@ -274,7 +322,9 @@ struct RemoteVideoListView: View {
                             }
                         }) {
                             Image(systemName: "flame.fill").foregroundColor(.cyan)
-                        }.disabled(sortedAndFilteredVideos.filter { isShortVideo($0) }.isEmpty)
+                        }
+                        .disabled(sortedAndFilteredVideos.filter { isShortVideo($0) }.isEmpty)
+                        .accessibilityLabel("ランダムでショートを再生")
                     }
                 }
             }
@@ -287,6 +337,25 @@ struct RemoteVideoListView: View {
             Button("残す", role: .cancel) { cleanUpTempFiles() }
         } message: {
             Text("アップロードしたメディアを元のアプリから削除しますか？\n（写真アプリの場合はOSの削除確認が表示されます）")
+        }
+        .confirmationDialog("削除オプション", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
+            if serverName == "ALL VIDEOS" || serverName == "ALL PHOTOS" {
+                Button("ゴミ箱に入れる", role: .destructive) {
+                    performDelete(completely: false)
+                }
+            } else {
+                Button("アルバムから外す", role: .destructive) {
+                    performDelete(completely: false)
+                }
+            }
+            Button("完全に削除", role: .destructive) {
+                performDelete(completely: true)
+            }
+            Button("キャンセル", role: .cancel) {
+                targetVideoIDsToDelete.removeAll()
+            }
+        } message: {
+            Text(serverName == "ALL VIDEOS" || serverName == "ALL PHOTOS" ? "「ゴミ箱に入れる」はサーバーのゴミ箱へ移動し、後から元に戻せます。「完全に削除」はサーバーやパソコンからも完全に削除され元に戻せません。" : "「アルバムから外す」はアルバムから消すだけですが、「完全に削除」はサーバーやパソコンからも動画を完全に削除します。")
         }
         .fullScreenCover(item: $photoToView) { photo in
             let onlyPhotos = sortedAndFilteredVideos.filter { $0.isPhoto }
@@ -325,7 +394,7 @@ struct RemoteVideoListView: View {
         }
         .onChange(of: allServerAlbums) { _, newAlbums in
             if isVirtualAlbum && videos.isEmpty && !newAlbums.isEmpty {
-                Task { await fetchVideosFromServer() }
+                Task { await fetchVideosFromServer(forceRefresh: true) }
             }
         }
         .onAppear {
@@ -431,7 +500,7 @@ struct RemoteVideoListView: View {
             .padding(.vertical, 16)
             .padding(.bottom, isSelectionMode ? 100 : 0)
         }
-        .refreshable { await fetchVideosFromServer() }
+        .refreshable { await fetchVideosFromServer(forceRefresh: true) }
     }
 
     // MARK: - リスト表示
@@ -450,7 +519,7 @@ struct RemoteVideoListView: View {
             .padding(.vertical, 16)
             .padding(.bottom, isSelectionMode ? 100 : 0)
         }
-        .refreshable { await fetchVideosFromServer() }
+        .refreshable { await fetchVideosFromServer(forceRefresh: true) }
     }
     
     // MARK: - ホームフィード（YouTube風 大きなサムネイル）
@@ -496,7 +565,7 @@ struct RemoteVideoListView: View {
                 centeredVideoIDInFeed = closestID
             }
         }
-        .refreshable { await fetchVideosFromServer() }
+        .refreshable { await fetchVideosFromServer(forceRefresh: true) }
     }
     
     private func getStableShorts(for shelfIndex: Int, from allShorts: [RemoteVideoInfo]) -> [RemoteVideoInfo] {
@@ -920,9 +989,28 @@ struct RemoteVideoListView: View {
     // MARK: - API Calls
     private var isVirtualAlbum: Bool { albumID == "HISTORY" || albumID == "FAVORITES" || albumID == "SHORTS" || albumID == "HOME" || albumID == "SHORTS_FAVORITES" }
     private var shouldHideNavigationBar: Bool { (videoToPlay != nil && !isPlayerMinimized) || albumID == "SHORTS" || albumID == "SHORTS_FAVORITES" }
+    private var isPhotoSortContext: Bool {
+        if let album = allServerAlbums.first(where: { $0.id == albumID }) {
+            return album.type == "photo" || album.name == "ALL PHOTOS"
+        }
+        return serverName == "ALL PHOTOS" || videos.contains(where: { $0.isPhoto }) && videos.allSatisfy { $0.isPhoto }
+    }
 
-    private func fetchVideosFromServer() async {
-        await viewModel.fetchVideos(serverAddress: serverAddress, albumID: albumID, allServerAlbums: allServerAlbums)
+    private var sortOrderBinding: Binding<RemoteSortOrder> {
+        Binding(
+            get: { currentSortOrder },
+            set: { newValue in
+                if isPhotoSortContext {
+                    appSettings.remotePhotoAlbumSortOrder = newValue
+                } else {
+                    appSettings.remoteVideoAlbumSortOrder = newValue
+                }
+            }
+        )
+    }
+
+    private func fetchVideosFromServer(forceRefresh: Bool = false) async {
+        await viewModel.fetchVideos(serverAddress: serverAddress, albumID: albumID, allServerAlbums: allServerAlbums, forceRefresh: forceRefresh)
     }
     
     private func executeMove(to targetID: String) {
@@ -947,17 +1035,29 @@ struct RemoteVideoListView: View {
             selectedVideoIDs.removeAll()
             Task { await fetchVideosFromServer() }
         } else {
-            Task {
-                await viewModel.deleteVideos(ids: ids, serverAddress: serverAddress, albumID: albumID, allServerAlbums: allServerAlbums)
-                isSelectionMode = false
-                selectedVideoIDs.removeAll()
-            }
+            targetVideoIDsToDelete = ids
+            showDeleteConfirmation = true
         }
     }
     
     private func deleteSingleVideo(id: String) {
+        targetVideoIDsToDelete = [id]
+        showDeleteConfirmation = true
+    }
+    
+    private func performDelete(completely: Bool) {
+        let ids = targetVideoIDsToDelete
+        targetVideoIDsToDelete.removeAll()
+        guard !ids.isEmpty else { return }
+        
         Task {
-            await viewModel.deleteVideos(ids: [id], serverAddress: serverAddress, albumID: albumID, allServerAlbums: allServerAlbums)
+            if completely {
+                await viewModel.deleteVideosCompletely(ids: ids, serverAddress: serverAddress, albumID: albumID, allServerAlbums: allServerAlbums)
+            } else {
+                await viewModel.deleteVideos(ids: ids, serverAddress: serverAddress, albumID: albumID, allServerAlbums: allServerAlbums)
+            }
+            isSelectionMode = false
+            selectedVideoIDs.removeAll()
         }
     }
     

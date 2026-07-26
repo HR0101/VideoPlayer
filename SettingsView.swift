@@ -13,6 +13,11 @@ struct SettingsView: View {
                         Text("リスト表示").tag(1)
                         Text("グリッド表示").tag(2)
                     }
+
+                    Picker("画像ビューアの左右タップ", selection: $appSettings.photoTapNavigationMode) {
+                        Text("右タップで次へ").tag(0)
+                        Text("左タップで次へ").tag(1)
+                    }
                     
                     Toggle("デフォルトで「同じアルバム」のみ表示", isOn: $appSettings.showSameAlbumOnlyDefault)
                         .tint(Color.appGold)
@@ -25,6 +30,21 @@ struct SettingsView: View {
                             Text("横幅全画面").font(.caption).foregroundStyle(.gray)
                             Spacer()
                             Text("縦全画面").font(.caption).foregroundStyle(.gray)
+                        }
+                    }
+                }
+                .listRowBackground(Color.appDarkSurface)
+
+                Section(header: Text("アルバムの並び順").foregroundStyle(Color.appGold)) {
+                    Picker("動画アルバム", selection: $appSettings.remoteVideoAlbumSortOrder) {
+                        ForEach(RemoteSortOrder.allCases) { order in
+                            Text(order.rawValue).tag(order)
+                        }
+                    }
+
+                    Picker("画像アルバム", selection: $appSettings.remotePhotoAlbumSortOrder) {
+                        ForEach(RemoteSortOrder.allCases) { order in
+                            Text(order.rawValue).tag(order)
                         }
                     }
                 }

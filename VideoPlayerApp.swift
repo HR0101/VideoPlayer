@@ -25,6 +25,13 @@ struct VideoPlayerApp: App {
         } catch {
             print("AVAudioSession の設定に失敗: \(error)")
         }
+
+        // サムネイルを AsyncImage（共有URLSession）で大量に読むため、既定では小さい
+        // URLCache を拡大する。サーバー側の Cache-Control と合わせて再取得を防ぐ。
+        URLCache.shared = URLCache(
+            memoryCapacity: 64 * 1024 * 1024,
+            diskCapacity: 512 * 1024 * 1024
+        )
     }
 
     var body: some Scene {

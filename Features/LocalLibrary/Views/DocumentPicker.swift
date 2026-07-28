@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 struct DocumentPicker: UIViewControllerRepresentable {
     let albumName: String
-    let videoManager: VideoManager
+    let videoManager: LocalLibraryViewModel
     let onDismiss: () -> Void
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {

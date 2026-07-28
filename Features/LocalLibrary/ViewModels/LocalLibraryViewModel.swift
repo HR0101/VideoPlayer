@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 @MainActor
-class VideoManager: ObservableObject {
+final class LocalLibraryViewModel: ObservableObject {
     @Published var albums: [String] = []
 
     private let rootDirectory: URL

@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct MainTabView: View {
-    @EnvironmentObject var serverManager: ServerManager
+    @EnvironmentObject var serverManager: ServerConnectionViewModel
     @EnvironmentObject var serverBrowser: ServerBrowser
     @EnvironmentObject var navState: AppNavigationState
     
@@ -46,131 +46,6 @@ struct MainTabView: View {
         }
         .onChange(of: serverBrowser.discoveredServers) { _, servers in
             serverManager.updateServer(servers.first)
-        }
-    }
-}
-
-// MARK: - ホームタブ
-struct HomeTabView: View {
-    @EnvironmentObject var serverManager: ServerManager
-    
-    var body: some View {
-        if let server = serverManager.server, let address = server.address {
-            NavigationStack {
-                RemoteVideoListView(
-                    serverName: "ホーム",
-                    serverAddress: address,
-                    albumID: "HOME", // "HOME" ID for randomized feed
-                    allServerAlbums: serverManager.albums
-                )
-            }
-        } else {
-            ServerConnectingView(title: "ホーム")
-        }
-    }
-}
-
-// MARK: - ショートタブ
-struct ShortsTabView: View {
-    @EnvironmentObject var serverManager: ServerManager
-    @EnvironmentObject var navState: AppNavigationState
-    
-    var body: some View {
-        if let server = serverManager.server, let address = server.address {
-            NavigationStack {
-                RemoteVideoListView(
-                    serverName: "ショート",
-                    serverAddress: address,
-                    albumID: "SHORTS",
-                    allServerAlbums: serverManager.albums,
-                    initialVideoToPlay: navState.targetShortsVideo
-                )
-            }
-            .onChange(of: navState.targetShortsVideo) { _, _ in
-                // Target shorts video changed, RemoteVideoListView will handle if we pass it, but wait:
-                // If it's already rendered, RemoteVideoListView's task won't rerun unless id changes.
-                // We can use .id to force recreation if needed, but it might reset the whole list.
-            }
-        } else {
-            ServerConnectingView(title: "ショート")
-        }
-    }
-}
-
-// MARK: - サーバー接続中のローディング画面
-struct ServerConnectingView: View {
-    let title: String
-    @EnvironmentObject var serverBrowser: ServerBrowser
-    @State private var showNotFound = false
-    @State private var searchAttempt = 0
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                AppBackground()
-                if showNotFound {
-                    VStack(spacing: 20) {
-                        Image(systemName: "wifi.slash")
-                            .font(.system(size: 60))
-                            .foregroundStyle(.gray)
-                        Text("サーバーに接続されていません")
-                            .font(.headline)
-                            .foregroundStyle(.white)
-                        Text("MacでAllServerForMacを起動し、\n同じWi-Fiに接続してください")
-                            .font(.subheadline)
-                            .foregroundStyle(.gray)
-                            .multilineTextAlignment(.center)
-
-                        Button {
-                            Haptics.light()
-                            serverBrowser.stopBrowsing()
-                            serverBrowser.startBrowsing()
-                            withAnimation { showNotFound = false }
-                            searchAttempt += 1
-                            scheduleNotFoundFallback()
-                        } label: {
-                            Label("もう一度探す", systemImage: "arrow.clockwise")
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(Color.appDarkBackground)
-                                .padding(.horizontal, 24)
-                                .padding(.vertical, 12)
-                                .background(AppTheme.goldGradient)
-                                .clipShape(Capsule())
-                        }
-                        .padding(.top, 8)
-                    }
-                } else {
-                    VStack(spacing: 24) {
-                        ZStack {
-                            Circle()
-                                .stroke(Color.appGold.opacity(0.2), lineWidth: 3)
-                                .frame(width: 56, height: 56)
-                            ProgressView().scaleEffect(1.4).tint(Color.appGold)
-                        }
-                        Text("サーバーを探しています...")
-                            .font(.headline)
-                            .foregroundStyle(.white)
-                    }
-                }
-            }
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbarBackground(Color.appDarkBackground, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-        }
-        .onAppear {
-            scheduleNotFoundFallback()
-        }
-    }
-
-    /// 一定時間サーバーが見つからなければ「未接続」表示に切り替える。
-    /// 再検索ボタンで探索し直した場合は古いタイマーを無効化する。
-    private func scheduleNotFoundFallback() {
-        let attempt = searchAttempt
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-            guard attempt == searchAttempt else { return }
-            withAnimation { showNotFound = true }
         }
     }
 }

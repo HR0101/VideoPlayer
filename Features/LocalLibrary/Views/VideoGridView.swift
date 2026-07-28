@@ -117,7 +117,7 @@ struct VideoGridView: View {
 
     let albumType: AlbumType
     let albumName: String
-    @ObservedObject var videoManager: VideoManager
+    @ObservedObject var videoManager: LocalLibraryViewModel
     @EnvironmentObject var appSettings: AppSettings
 
     @State private var videoMetadatas: [VideoMetadata] = []

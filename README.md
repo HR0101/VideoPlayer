@@ -48,26 +48,38 @@ Mac の「個人用メディアサーバー」（[AllServerForMac](../AllServerF
 
 ---
 
-## ソース構成
+## アーキテクチャ
 
-| ファイル | 役割 |
+画面単位のMVVMを基本とし，機能ごとに`Models`，`Views`，`ViewModels`，`Services`を配置しています．アプリ全体の画面遷移と依存オブジェクトの生成は`App`に集約し，共通デザインと拡張は`Common`から利用します．
+
+```text
+VideoPlayer/
+├── App/
+│   ├── Models/                  # アプリ全体のナビゲーション状態
+│   ├── Views/                   # ルートタブ
+│   └── VideoPlayerApp.swift     # エントリーポイントと依存注入
+├── Common/
+│   ├── DesignSystem/            # 色，余白，背景などのUI基盤
+│   └── Extensions/              # 複数機能から使うSwift拡張
+└── Features/
+    ├── LibraryHub/              # ホーム，ショート，アルバム入口
+    ├── LocalLibrary/            # 端末内メディアの管理と取り込み
+    ├── RemoteLibrary/           # サーバー上のアルバムとメディア一覧
+    ├── ServerConnection/        # Bonjour検出，PIN認証，API通信
+    ├── Playback/                # 動画，写真，ショートの再生
+    └── Settings/                # アプリ設定
+```
+
+主な状態管理クラスは次のとおりです．
+
+| ViewModel | 責務 |
 |---|---|
-| `VideoPlayerApp.swift` | アプリのエントリーポイント |
-| `ServerModels.swift` | サーバー検出（Bonjour `ServerBrowser`）・接続・PIN 認証・API 呼び出し |
-| `AlbumListView.swift` | トップ画面（サーバー一覧 / ローカル / サーバー停止操作） |
-| `RemoteAlbumListView.swift` | リモートサーバーのアルバム一覧 |
-| `RemoteVideoListView.swift` | リモート動画/写真の一覧・再生・画質切替・スライドショー |
-| `VideoGridView.swift` | ローカルライブラリのグリッド表示 |
-| `VideoManager.swift` | ローカルライブラリ管理 |
-| `Models.swift` | データモデル |
-| `PlayerManager.swift` | AVPlayer 管理（再生制御・画質切替） |
-| `CustomVideoPlayerContainer.swift` | プレイヤーのコンテナビュー |
-| `PhotePicker.swift` | 写真ライブラリからの取り込み |
-| `DocumentPicker.swift` | ファイルからの取り込み |
-| `DownloadManager.swift` | ダウンロード管理 |
-| `ThumbnailGenerator.swift` | サムネイル生成 |
-| `LocalVideoThumbnailView.swift` | ローカル動画サムネイル表示 |
-| `AppSettings.swift` | アプリ設定（PIN 保持など） |
+| `LocalLibraryViewModel` | ローカルアルバムと動画ファイルの管理 |
+| `RemoteVideoListViewModel` | リモートメディアの取得，検索，並び替え，更新 |
+| `ServerConnectionViewModel` | 接続中サーバーとアルバム一覧の状態管理 |
+| `PlayerViewModel` | `AVPlayer`の再生状態，シーク，動画切替 |
+| `RemoteShortsViewModel` | ショート動画の順序，再生区間，進行状況 |
+| `RemoteShortsFavoritesViewModel` | お気に入りショートのクリップ再生 |
 
 ---
 

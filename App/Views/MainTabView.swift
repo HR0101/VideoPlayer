@@ -4,7 +4,7 @@ struct MainTabView: View {
     @EnvironmentObject var serverManager: ServerConnectionViewModel
     @EnvironmentObject var serverBrowser: ServerBrowser
     @EnvironmentObject var navState: AppNavigationState
-    
+
     var body: some View {
         TabView(selection: $navState.selectedTab) {
             // 1. ホームタブ (YouTube風 おすすめ動画)
@@ -14,7 +14,7 @@ struct MainTabView: View {
                     Text("ホーム")
                 }
                 .tag(0)
-            
+
             // 2. ショートタブ
             ShortsTabView()
                 .tabItem {
@@ -22,7 +22,7 @@ struct MainTabView: View {
                     Text("ショート")
                 }
                 .tag(1)
-            
+
             // 3. アルバムタブ (従来のメイン画面)
             AlbumListView()
                 .tabItem {
@@ -30,7 +30,7 @@ struct MainTabView: View {
                     Text("アルバム")
                 }
                 .tag(2)
-                
+
             // 4. 設定タブ
             SettingsView()
                 .tabItem {

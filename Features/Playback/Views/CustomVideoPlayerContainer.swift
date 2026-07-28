@@ -33,11 +33,11 @@ struct PlayerLayerView: UIViewRepresentable {
 
 struct CustomVideoPlayerContainer: View {
     let videoURL: URL
-    @StateObject private var playerManager: PlayerManager
+    @StateObject private var playerManager: PlayerViewModel
 
     init(videoURL: URL) {
         self.videoURL = videoURL
-        _playerManager = StateObject(wrappedValue: PlayerManager(videoURL: videoURL))
+        _playerManager = StateObject(wrappedValue: PlayerViewModel(videoURL: videoURL))
     }
 
     var body: some View {

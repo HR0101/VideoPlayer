@@ -2,7 +2,7 @@ import AVKit
 import Combine
 
 @MainActor
-final class PlayerManager: ObservableObject {
+final class PlayerViewModel: ObservableObject {
     @Published var player = AVPlayer()
     @Published var isPlaying = false
     @Published var isReadyToPlay = false

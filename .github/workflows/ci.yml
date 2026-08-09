@@ -1,0 +1,72 @@
+name: iOS CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: macos-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Show toolchain versions
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Verify MediaServerKit
+        run: test -f Packages/MediaServerKit/Package.swift
+
+      - name: Test MediaServerKit
+        working-directory: Packages/MediaServerKit
+        run: swift test
+
+      - name: Resolve Swift package dependencies
+        run: >-
+          xcodebuild -resolvePackageDependencies
+          -project VideoPlayer.xcodeproj
+          -scheme VideoPlayer
+
+      - name: Select iPhone Simulator
+        run: |
+          simulatorID="$(xcrun simctl list devices available | awk -F '[()]' '/^[[:space:]]+iPhone/ { print $2; exit }')"
+          if [[ -z "$simulatorID" ]]; then
+            echo "利用可能なiPhone Simulatorがありません．" >&2
+            exit 1
+          fi
+          echo "SIMULATOR_ID=$simulatorID" >> "$GITHUB_ENV"
+          echo "Selected simulator: $simulatorID"
+
+      - name: Build iOS app
+        run: >-
+          xcodebuild build
+          -project VideoPlayer.xcodeproj
+          -scheme VideoPlayer
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath "$RUNNER_TEMP/VideoPlayerDerivedData"
+          CODE_SIGNING_ALLOWED=NO
+
+      - name: Test iOS app
+        run: >-
+          xcodebuild test
+          -project VideoPlayer.xcodeproj
+          -scheme VideoPlayer
+          -destination "platform=iOS Simulator,id=$SIMULATOR_ID"
+          -derivedDataPath "$RUNNER_TEMP/VideoPlayerDerivedData"
+          CODE_SIGNING_ALLOWED=NO
+          -only-testing:VideoPlayerTests

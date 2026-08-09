@@ -37,6 +37,7 @@ struct RemoteVideoListView: View {
     
     @EnvironmentObject var navState: AppNavigationState
     @EnvironmentObject var appSettings: AppSettings
+    @EnvironmentObject var remoteControlViewModel: RemoteControlViewModel
     
     @StateObject private var viewModel = RemoteVideoListViewModel()
     @State private var showEmptyMessage = false
@@ -941,6 +942,13 @@ struct RemoteVideoListView: View {
     
     @ViewBuilder
     private func videoContextMenu(_ video: RemoteVideoInfo) -> some View {
+        if !video.isPhoto {
+            Button {
+                playOnMac(video)
+            } label: {
+                Label("Macで再生", systemImage: "display.and.arrow.down")
+            }
+        }
         Button { videoForInfoSheet = video } label: { Label("詳細情報", systemImage: "info.circle") }
         Button {
             favorites.toggle(video.id)
@@ -964,6 +972,20 @@ struct RemoteVideoListView: View {
                 } label: { Label("履歴から削除", systemImage: "minus.circle") }
             } else {
                 Button(role: .destructive) { deleteSingleVideo(id: video.id) } label: { Label("アルバムから外す", systemImage: "minus.circle") }
+            }
+        }
+    }
+
+    private func playOnMac(_ video: RemoteVideoInfo) {
+        Task {
+            let didOpen = await remoteControlViewModel.openOnMac(
+                videoID: video.id,
+                albumID: albumID,
+                serverAddress: serverAddress
+            )
+            if didOpen {
+                Haptics.medium()
+                navState.selectedTab = 3
             }
         }
     }

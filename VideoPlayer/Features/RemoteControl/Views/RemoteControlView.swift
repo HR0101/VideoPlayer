@@ -1,4 +1,112 @@
 import SwiftUI
+import UIKit
+
+private struct RemoteChapterThumbnailView: View {
+  let url: URL?
+  let isCurrent: Bool
+  let timeText: String
+  let action: () -> Void
+
+  @State private var image: UIImage?
+  @State private var didFail = false
+
+  private let maximumLoadAttempts = 4
+  private let retryDelayNanoseconds: UInt64 = 700_000_000
+  private let width: CGFloat = 156
+  private let height: CGFloat = 88
+
+  var body: some View {
+    Button(action: action) {
+      ZStack(alignment: .bottomTrailing) {
+        thumbnailContent
+          .frame(width: width, height: height)
+          .clipped()
+
+        Text(timeText)
+          .font(.caption2.monospacedDigit().weight(.semibold))
+          .foregroundStyle(.white)
+          .padding(.horizontal, 6)
+          .padding(.vertical, 3)
+          .background(.black.opacity(0.72), in: Capsule())
+          .padding(6)
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+          .stroke(
+            isCurrent ? Color.appGold : Color.white.opacity(0.16),
+            lineWidth: isCurrent ? 3 : 1
+          )
+      }
+      .shadow(color: isCurrent ? Color.appGold.opacity(0.28) : .clear, radius: 10)
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("\(timeText)へ移動")
+    .task(id: url) {
+      await loadImage()
+    }
+  }
+
+  @ViewBuilder
+  private var thumbnailContent: some View {
+    if let image {
+      Image(uiImage: image)
+        .resizable()
+        .scaledToFill()
+    } else {
+      ZStack {
+        Color.white.opacity(0.08)
+        if didFail {
+          Image(systemName: "photo.badge.exclamationmark")
+            .foregroundStyle(.white.opacity(0.5))
+        } else {
+          ProgressView()
+            .tint(Color.appGold)
+        }
+      }
+    }
+  }
+
+  private func loadImage() async {
+    image = nil
+    didFail = false
+    guard let url else {
+      didFail = true
+      return
+    }
+
+    for attempt in 0..<maximumLoadAttempts {
+      if Task.isCancelled { return }
+      do {
+        var request = URLRequest(url: url)
+        request.cachePolicy = attempt == 0
+          ? .returnCacheDataElseLoad
+          : .reloadIgnoringLocalCacheData
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+          didFail = true
+          return
+        }
+        if httpResponse.statusCode == 200, let loadedImage = UIImage(data: data) {
+          image = loadedImage
+          return
+        }
+        guard httpResponse.statusCode == 202 else {
+          didFail = true
+          return
+        }
+      } catch {
+        if attempt == maximumLoadAttempts - 1 {
+          didFail = true
+          return
+        }
+      }
+
+      try? await Task.sleep(nanoseconds: retryDelayNanoseconds)
+    }
+    didFail = true
+  }
+}
 
 struct RemoteControlView: View {
   @EnvironmentObject private var serverManager: ServerConnectionViewModel
@@ -12,6 +120,7 @@ struct RemoteControlView: View {
 
   private let controlButtonSize: CGFloat = 48
   private let primaryControlButtonSize: CGFloat = 72
+  private let chapterCount = 10
 
   private var serverAddress: String? {
     serverManager.server?.address
@@ -98,7 +207,7 @@ struct RemoteControlView: View {
 
   private var nowPlayingView: some View {
     VStack(spacing: 24) {
-      artworkView
+      chapterTimelineView
       playbackInformation
       timelineControl
       transportControls
@@ -107,27 +216,36 @@ struct RemoteControlView: View {
     }
   }
 
-  private var artworkView: some View {
-    AsyncImage(url: thumbnailURL) { phase in
-      switch phase {
-      case .success(let image):
-        image.resizable().scaledToFill()
-      default:
-        ZStack {
-          Color.white.opacity(0.08)
-          Image(systemName: "film.fill")
-            .font(.system(size: 52))
-            .foregroundStyle(.white.opacity(0.35))
-        }
+  private var chapterTimelineView: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        Label("シーンから移動", systemImage: "rectangle.stack.fill")
+          .font(.headline)
+          .foregroundStyle(.white)
+        Spacer()
+        Text("10分割")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(Color.appGold)
       }
+
+      ScrollView(.horizontal) {
+        LazyHStack(spacing: 12) {
+          ForEach(Array(chapterTimes.enumerated()), id: \.offset) { _, time in
+            RemoteChapterThumbnailView(
+              url: chapterThumbnailURL(at: time),
+              isCurrent: isCurrentChapter(time),
+              timeText: timeText(time)
+            ) {
+              scrubPosition = time
+              Task { await viewModel.send(action: .seekTo, value: time) }
+            }
+          }
+        }
+        .padding(.horizontal, 2)
+        .padding(.vertical, 8)
+      }
+      .scrollIndicators(.hidden)
     }
-    .aspectRatio(16 / 9, contentMode: .fit)
-    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 24, style: .continuous)
-        .stroke(Color.appGold.opacity(0.45), lineWidth: 1)
-    }
-    .shadow(color: Color.appGold.opacity(0.15), radius: 24, y: 10)
   }
 
   private var playbackInformation: some View {
@@ -303,13 +421,34 @@ struct RemoteControlView: View {
     .accessibilityLabel(accessibilityLabel)
   }
 
-  private var thumbnailURL: URL? {
+  private var chapterTimes: [Double] {
+    let duration = viewModel.playbackState.duration
+    guard duration.isFinite, duration > 0 else { return [] }
+    return (0..<chapterCount).map { index in
+      duration * Double(index) / Double(chapterCount)
+    }
+  }
+
+  private func chapterThumbnailURL(at time: Double) -> URL? {
     guard let serverAddress,
           let videoID = viewModel.playbackState.videoID else { return nil }
     return ServerAuth.mediaURL(
       address: serverAddress,
-      path: "/thumbnail/\(videoID)"
+      path: "/thumbnail/\(videoID)",
+      query: [
+        URLQueryItem(name: "time", value: String(format: "%.3f", time)),
+        URLQueryItem(name: "original", value: "true"),
+        URLQueryItem(name: "max", value: "480")
+      ]
     )
+  }
+
+  private func isCurrentChapter(_ chapterTime: Double) -> Bool {
+    let duration = viewModel.playbackState.duration
+    guard duration.isFinite, duration > 0 else { return false }
+    let interval = duration / Double(chapterCount)
+    let currentTime = viewModel.playbackState.currentTime
+    return currentTime >= chapterTime && currentTime < chapterTime + interval
   }
 
   private func timeText(_ seconds: Double) -> String {

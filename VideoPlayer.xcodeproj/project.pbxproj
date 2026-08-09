@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		7934EB602DFF000000000012 /* MediaServerKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7934EB602DFF000000000011 /* MediaServerKit */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		7934EB412DFFEE7400C306D1 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -65,6 +69,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7934EB602DFF000000000012 /* MediaServerKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -125,6 +130,7 @@
 			);
 			name = VideoPlayer;
 			packageProductDependencies = (
+				7934EB602DFF000000000011 /* MediaServerKit */,
 			);
 			productName = VideoPlayer;
 			productReference = 7934EB332DFFEE7100C306D1 /* VideoPlayer.app */;
@@ -208,6 +214,9 @@
 			);
 			mainGroup = 7934EB2A2DFFEE7100C306D1;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				7934EB602DFF000000000010 /* XCLocalSwiftPackageReference "../MediaServerKit" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 7934EB342DFFEE7100C306D1 /* Products */;
 			projectDirPath = "";
@@ -416,9 +425,9 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = VideoPlayer/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "サーバー検索のため";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "同じWi-Fi上のMacサーバーを自動検出し、動画や写真をストリーミング再生するために使用します。";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "メディアを保存するために使用します";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Value: 動画をアルバムにインポートするために写真ライブラリへのアクセスを許可してください。 （またはご自身で設定したメッセージ）\n\nValue: 動画をアルバムにインポートするために写真ライブラリへのアクセスを許可してください。 （またはご自身で設定したメッセージ）\n\n動画のインポートするために写真へのアクセスを許可してください";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "端末内の動画や写真をサーバーへアップロードするために、写真ライブラリへのアクセスを使用します。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -456,9 +465,9 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = VideoPlayer/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "サーバー検索のため";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "同じWi-Fi上のMacサーバーを自動検出し、動画や写真をストリーミング再生するために使用します。";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "メディアを保存するために使用します";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Value: 動画をアルバムにインポートするために写真ライブラリへのアクセスを許可してください。 （またはご自身で設定したメッセージ）\n\nValue: 動画をアルバムにインポートするために写真ライブラリへのアクセスを許可してください。 （またはご自身で設定したメッセージ）\n\n動画のインポートするために写真へのアクセスを許可してください";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "端末内の動画や写真をサーバーへアップロードするために、写真ライブラリへのアクセスを使用します。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -595,6 +604,21 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		7934EB602DFF000000000010 /* XCLocalSwiftPackageReference "../MediaServerKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../MediaServerKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		7934EB602DFF000000000011 /* MediaServerKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7934EB602DFF000000000010 /* XCLocalSwiftPackageReference "../MediaServerKit" */;
+			productName = MediaServerKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 7934EB2B2DFFEE7100C306D1 /* Project object */;
 }

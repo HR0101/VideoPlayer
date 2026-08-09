@@ -1,29 +1,7 @@
 {
   "images" : [
     {
-      "filename" : "istockphoto-1825848708-612x612.png",
-      "idiom" : "universal",
-      "platform" : "ios",
-      "size" : "1024x1024"
-    },
-    {
-      "appearances" : [
-        {
-          "appearance" : "luminosity",
-          "value" : "dark"
-        }
-      ],
-      "idiom" : "universal",
-      "platform" : "ios",
-      "size" : "1024x1024"
-    },
-    {
-      "appearances" : [
-        {
-          "appearance" : "luminosity",
-          "value" : "tinted"
-        }
-      ],
+      "filename" : "Gemini_Generated_Image_b2fcgfb2fcgfb2fc (1).png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"

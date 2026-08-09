@@ -31,13 +31,21 @@ struct MainTabView: View {
                 }
                 .tag(2)
 
-            // 4. 設定タブ
+            // 4. Macリモコンタブ
+            RemoteControlView()
+                .tabItem {
+                    Image(systemName: "appletvremote.gen4.fill")
+                    Text("リモコン")
+                }
+                .tag(3)
+
+            // 5. 設定タブ
             SettingsView()
                 .tabItem {
                     Image(systemName: "gearshape.fill")
                     Text("設定")
                 }
-                .tag(3)
+                .tag(4)
         }
         .tint(Color.appGold)
         .preferredColorScheme(.dark)

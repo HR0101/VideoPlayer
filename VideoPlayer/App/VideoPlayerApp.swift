@@ -8,6 +8,7 @@ struct VideoPlayerApp: App {
     @StateObject private var serverManager = ServerConnectionViewModel()
     @StateObject private var downloadManager = DownloadManager()
     @StateObject private var navState = AppNavigationState()
+    @StateObject private var remoteControlViewModel = RemoteControlViewModel()
 
     init() {
         // 動画アプリとして、端末のサイレント（消音）スイッチに関係なく音声を再生する。
@@ -36,6 +37,7 @@ struct VideoPlayerApp: App {
                     .environmentObject(serverManager)
                     .environmentObject(downloadManager)
                     .environmentObject(navState)
+                    .environmentObject(remoteControlViewModel)
 
                 if downloadManager.isDownloading || downloadManager.successMessage != nil || downloadManager.errorMessage != nil {
                     DownloadStatusOverlay()

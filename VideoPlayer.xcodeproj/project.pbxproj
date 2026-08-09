@@ -606,16 +606,16 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		7934EB602DFF000000000010 /* XCLocalSwiftPackageReference "../MediaServerKit" */ = {
+		7934EB602DFF000000000010 /* XCLocalSwiftPackageReference "Packages/MediaServerKit" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = ../MediaServerKit;
+			relativePath = Packages/MediaServerKit;
 		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		7934EB602DFF000000000011 /* MediaServerKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 7934EB602DFF000000000010 /* XCLocalSwiftPackageReference "../MediaServerKit" */;
+			package = 7934EB602DFF000000000010 /* XCLocalSwiftPackageReference "Packages/MediaServerKit" */;
 			productName = MediaServerKit;
 		};
 /* End XCSwiftPackageProductDependency section */

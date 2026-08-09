@@ -63,6 +63,9 @@ final class ServerConnectionViewModel: ObservableObject {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             self.albums = try decoder.decode([RemoteAlbumInfo].self, from: data)
+            Task {
+                await PlaybackSyncService.shared.connect(serverAddress: serverAddress)
+            }
         } catch {
             errorMessage = "サーバーアルバムの取得に失敗しました。"
         }

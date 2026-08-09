@@ -26,6 +26,7 @@ struct DraggablePlayerView: View {
     @ObservedObject private var favorites = FavoritesManager.shared
     @State private var dragOffset: CGSize = .zero
     @State private var isVideoSwipeTransitioning = false
+    @State private var isChangingVideo = false
     @State private var showSameAlbumOnly: Bool = false
     @State private var selectedQuality: String = "original"
     
@@ -77,7 +78,10 @@ struct DraggablePlayerView: View {
         let initialVideo = videos[initialIndex]
         let url = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(initialVideo.id)") ?? URL(string: "\(serverAddress)/video/\(initialVideo.id)")!
         let storedStartTime = FeedPlaybackManager.shared.times[initialVideo.id]
-        let startAt = [initialStartTime, storedStartTime].compactMap { $0 }.first(where: { $0.isFinite }) ?? 0.0
+        let syncedStartTime = PlaybackSyncService.shared.resumeTime(videoID: initialVideo.id)
+        let startAt = [initialStartTime, syncedStartTime, storedStartTime]
+            .compactMap { $0 }
+            .first(where: { $0.isFinite }) ?? 0.0
         self._playerManager = StateObject(wrappedValue: PlayerViewModel(videoURL: url, startAt: startAt))
     }
     
@@ -118,11 +122,20 @@ struct DraggablePlayerView: View {
             syncCurrentIndexWithPlayingVideo()
         }
         .onReceive(playerManager.$isReadyToPlay) { ready in
+            if ready { isChangingVideo = false }
             if ready && isSlideshow { scheduleSlideshowAdvance() }
+        }
+        .onReceive(playerManager.$currentTime) { currentTime in
+            guard videos.indices.contains(currentIndex), !isSlideshow, !isChangingVideo else { return }
+            PlaybackSyncService.shared.recordProgress(
+                videoID: videos[currentIndex].id,
+                time: currentTime
+            )
         }
         .onDisappear {
             slideshowTask?.cancel()
             prepareTask?.cancel()
+            saveCurrentProgress()
             cleanupProxies()
             playerManager.shutdown()
         }
@@ -1297,6 +1310,8 @@ struct EfficientSeekBarRow: View {
     private func goTo(index newIndex: Int) {
         guard newIndex >= 0 && newIndex < videos.count else { return }
 
+        saveCurrentProgress()
+
         let generator = UIImpactFeedbackGenerator(style: .medium)
         generator.impactOccurred()
 
@@ -1304,16 +1319,22 @@ struct EfficientSeekBarRow: View {
         prepareTask?.cancel()
         isPreparingQuality = false
         selectedQuality = "original"
+        let newVideo = videos[newIndex]
+        guard let newURL = ServerAuth.mediaURL(
+            address: serverAddress,
+            path: "/video/\(newVideo.id)",
+            query: [URLQueryItem(name: "q", value: selectedQuality)]
+        ) else { return }
+        isChangingVideo = true
 
         currentIndex = newIndex
-        let newVideo = videos[newIndex]
         playingVideoID = newVideo.id
         PlaybackHistoryManager.shared.saveLastPlayed(id: newVideo.id)
 
-        if let newURL = ServerAuth.mediaURL(address: serverAddress, path: "/video/\(newVideo.id)", query: [URLQueryItem(name: "q", value: selectedQuality)]) {
-            let startAt = isSlideshow ? randomStart(for: newVideo) : 0
-            playerManager.changeVideo(to: newURL, startAt: startAt)
-        }
+        let startAt = isSlideshow
+            ? randomStart(for: newVideo)
+            : PlaybackSyncService.shared.resumeTime(videoID: newVideo.id) ?? 0
+        playerManager.changeVideo(to: newURL, startAt: startAt)
 
         showControls = true
         startHideTimer()
@@ -1339,6 +1360,9 @@ struct EfficientSeekBarRow: View {
     }
 
     private func handlePlaybackEnded() {
+        if videos.indices.contains(currentIndex) {
+            PlaybackSyncService.shared.clearProgress(videoID: videos[currentIndex].id)
+        }
         if repeatMode == .one {
             playerManager.restart()
             return
@@ -1373,6 +1397,19 @@ struct EfficientSeekBarRow: View {
         generator.impactOccurred()
         showControls = true
         startHideTimer()
+    }
+
+    private func saveCurrentProgress() {
+        guard videos.indices.contains(currentIndex), !isSlideshow, !isChangingVideo else { return }
+        if playerManager.duration > 0 && playerManager.currentTime >= playerManager.duration - 2 {
+            PlaybackSyncService.shared.clearProgress(videoID: videos[currentIndex].id)
+            return
+        }
+        PlaybackSyncService.shared.recordProgress(
+            videoID: videos[currentIndex].id,
+            time: playerManager.currentTime,
+            force: true
+        )
     }
     
     private func startHideTimer() {

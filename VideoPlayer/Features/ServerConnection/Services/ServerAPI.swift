@@ -1,4 +1,5 @@
 import Foundation
+import MediaServerKit
 
 // MARK: - API通信マネージャー
 enum ServerAPI {
@@ -97,6 +98,30 @@ enum ServerAPI {
 
         let (_, response) = try await URLSession.shared.upload(for: request, fromFile: fileURL)
         return (response as? HTTPURLResponse)?.statusCode == 200
+    }
+
+    /// 差分動画の探索結果を取り出す。
+    ///
+    /// 検出はサーバー側で行う。実ファイルを持っているのは Mac だけで、
+    /// フレームを時刻ぴったりで何枚も起こす処理をこちらへ持ってくる術がない。
+    /// 指紋づくりに時間がかかるぶん `state` が `scanning` で返ることがあるので、
+    /// `ready` になるまで少し間を空けて何度か呼ぶ（`groups` は途中でも入っている）。
+    static func fetchVariantScan(
+        serverAddress: String,
+        albumID: String
+    ) async throws -> RemoteVariantScanResult {
+        guard let url = URL(string: "\(serverAddress)/albums/\(albumID)/variants") else {
+            throw URLError(.badURL)
+        }
+        let (data, response) = try await URLSession.shared.data(
+            for: ServerAuth.request(url, address: serverAddress)
+        )
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(RemoteVariantScanResult.self, from: data)
     }
 
     /// サーバーが受け付けるアップロード上限（バイト）。取得できなければ nil（チェックはスキップ）。

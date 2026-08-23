@@ -80,6 +80,7 @@ struct RemoteVideoListView: View {
     @State private var isShortsPlaying: Bool = true
     
     @State private var showUploadSourceMenu = false
+    @State private var showVariantFinder = false
     @State private var showPhotoPicker = false
     @State private var showDocumentPicker = false
     @State private var isUploading = false
@@ -305,15 +306,25 @@ struct RemoteVideoListView: View {
 
                     Button(action: { withAnimation { isSelectionMode = true } }) { Text("選択").foregroundColor(accentGlowColor) }.disabled(videos.isEmpty)
 
+                    // 並び替えと差分探しは1つのメニューにまとめる。
+                    // ナビゲーションバーの右側はボタンを増やすほど詰まり、入り切らないぶんは
+                    // 黙って切り落とされる（画面の狭い端末で「押せるはずのものが出てこない」になる）。
                     if !isVirtualAlbum {
                         Menu {
+                            if sortedAndFilteredVideos.filter({ !$0.isPhoto }).count >= 2 {
+                                Button {
+                                    showVariantFinder = true
+                                } label: {
+                                    Label("差分動画を探す", systemImage: "rectangle.on.rectangle.angled")
+                                }
+                            }
                             Picker("並び替え", selection: sortOrderBinding) {
                                 ForEach(RemoteSortOrder.allCases) { order in
                                     Text(order.rawValue).tag(order)
                                 }
                             }
-                        } label: { Image(systemName: "arrow.up.arrow.down.circle").foregroundColor(accentGlowColor) }
-                            .accessibilityLabel("並び替え")
+                        } label: { Image(systemName: "ellipsis.circle").foregroundColor(accentGlowColor) }
+                            .accessibilityLabel("並び替え・差分動画を探す")
                     }
 
                     if albumID != "SHORTS" && albumID != "HOME" {
@@ -329,6 +340,13 @@ struct RemoteVideoListView: View {
                     }
                 }
             }
+        }
+        .fullScreenCover(isPresented: $showVariantFinder) {
+            RemoteVariantFinderView(
+                serverAddress: serverAddress,
+                albumID: albumID,
+                videos: sortedAndFilteredVideos.filter { !$0.isPhoto }
+            )
         }
         .sheet(isPresented: $showMoveTargetSheet) { moveTargetSheet }
         .sheet(isPresented: $showPhotoPicker) { ServerPhotoPicker { items in handlePickedMedia(items: items) } }

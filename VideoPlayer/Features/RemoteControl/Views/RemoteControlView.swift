@@ -139,6 +139,13 @@ struct RemoteControlView: View {
                 .tint(Color.appGold)
                 .foregroundStyle(.white)
                 .padding(.top, 120)
+            } else if viewModel.variantState.isAvailable, let serverAddress {
+              // 差分切り替え再生が動いているときは、通常再生のリモコンではなく
+              // 「どの差分を見せるか」を選ぶ盤面に差し替える。
+              RemoteVariantControlView(
+                viewModel: viewModel,
+                serverAddress: serverAddress
+              )
             } else if viewModel.playbackState.isAvailable {
               nowPlayingView
             } else {
@@ -190,7 +197,11 @@ struct RemoteControlView: View {
       statusCard(
         icon: "display",
         title: "再生待機中",
-        message: "アルバムで動画を長押しし，「Macで再生」を選ぶとここから操作できます．"
+        message: """
+          アルバムで動画を長押しし，「Macで再生」を選ぶとここから操作できます．
+          差分動画は，アルバムの「差分動画を探す」で Mac を選んで再生すると，\
+          ここから見せる1本を切り替えられます．
+          """
       )
       Button {
         navState.selectedTab = 2

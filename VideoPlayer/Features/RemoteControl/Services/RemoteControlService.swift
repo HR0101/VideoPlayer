@@ -71,6 +71,56 @@ enum RemoteControlService {
     _ = try await execute(request)
   }
 
+  // MARK: - 差分切り替え再生
+
+  static func fetchVariantState(serverAddress: String) async throws -> RemoteVariantState {
+    let request = try makeRequest(
+      serverAddress: serverAddress,
+      path: "/remote/variant",
+      method: "GET"
+    )
+    let data = try await execute(request)
+    do {
+      return try JSONDecoder().decode(RemoteVariantState.self, from: data)
+    } catch {
+      throw RemoteControlServiceError.invalidResponse
+    }
+  }
+
+  static func sendVariant(
+    _ command: RemoteVariantControlCommand,
+    serverAddress: String
+  ) async throws -> RemoteVariantState {
+    var request = try makeRequest(
+      serverAddress: serverAddress,
+      path: "/remote/variant/command",
+      method: "POST"
+    )
+    request.httpBody = try JSONEncoder().encode(command)
+    let data = try await execute(request)
+    do {
+      return try JSONDecoder().decode(RemoteVariantState.self, from: data)
+    } catch {
+      throw RemoteControlServiceError.invalidResponse
+    }
+  }
+
+  /// 選んだ差分を Mac の全画面で走らせる。並びはそのまま渡す（先頭が最初に見える1本）。
+  static func openVariant(
+    videoIDs: [String],
+    serverAddress: String
+  ) async throws {
+    var request = try makeRequest(
+      serverAddress: serverAddress,
+      path: "/remote/variant/open",
+      method: "POST"
+    )
+    request.httpBody = try JSONEncoder().encode(
+      RemoteVariantOpenCommand(videoIDs: videoIDs)
+    )
+    _ = try await execute(request)
+  }
+
   private static func makeRequest(
     serverAddress: String,
     path: String,

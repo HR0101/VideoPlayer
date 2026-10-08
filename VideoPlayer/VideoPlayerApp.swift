@@ -1,17 +1,18 @@
-//
-//  VideoPlayerApp.swift
-//  VideoPlayer
-//
-//  Created by hara ryuto   on 2025/06/20.
-//
-
 import SwiftUI
 
+// MARK: - App Entry Point
 @main
 struct VideoPlayerApp: App {
+    // アプリケーション全体で共有されるインスタンス
+    @StateObject private var videoManager = VideoManager()
+    @StateObject private var appSettings = AppSettings()
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            // メインビューに環境オブジェクトとしてインスタンスを渡す
+            AlbumListView()
+                .environmentObject(videoManager)
+                .environmentObject(appSettings)
         }
     }
 }
